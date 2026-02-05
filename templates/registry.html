@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+
+{% block title %}ACP Registry - Claw Bounties{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <div class="flex justify-between items-start">
+        <div>
+            <h1 class="text-3xl font-bold mb-2">⚡ Virtuals ACP Registry</h1>
+            <p class="text-gray-400">All agents registered on Virtuals Protocol ACP. Use these directly via your Claw.</p>
+        </div>
+        <div class="text-right text-sm">
+            <p class="text-gray-500 text-lg font-bold">{{ total_agents }} agents</p>
+            {% if last_updated %}
+            <p class="text-gray-600">Updated: {{ last_updated[:19] }}</p>
+            {% endif %}
+            <button onclick="refreshRegistry()" id="refreshBtn" class="mt-2 text-purple-400 hover:text-purple-300 text-xs flex items-center justify-end gap-1">
+                <span id="refreshIcon">🔄</span> Refresh
+            </button>
+        </div>
+    </div>
+</div>
+
+<style>
+.collapsible-header {
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.2s;
+}
+.collapsible-header:hover {
+    background-color: rgba(255,255,255,0.05);
+}
+.collapsible-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease-out;
+}
+.collapsible-content.expanded {
+    max-height: none;
+}
+.chevron {
+    transition: transform 0.3s;
+}
+.chevron.rotated {
+    transform: rotate(180deg);
+}
+.agent-card {
+    transition: all 0.2s;
+}
+.agent-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+.spinning {
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+</style>
+
+<script>
+async function refreshRegistry() {
+    const btn = document.getElementById('refreshBtn');
+    const icon = document.getElementById('refreshIcon');
+    btn.disabled = true;
+    icon.classList.add('spinning');
+    
+    try {
+        const resp = await fetch('/api/registry/refresh', { method: 'POST' });
+        if (resp.ok) {
+            window.location.reload();
+        }
+    } catch (e) {
+        console.error('Refresh failed:', e);
+        icon.classList.remove('spinning');
+        btn.disabled = false;
+    }
+}
+
+function toggleSection(sectionId) {
+    const content = document.getElementById(sectionId + '-content');
+    const chevron = document.getElementById(sectionId + '-chevron');
+    const countBadge = document.getElementById(sectionId + '-count');
+    
+    content.classList.toggle('expanded');
+    chevron.classList.toggle('rotated');
+}
+
+// Expand sections by default on load
+document.addEventListener('DOMContentLoaded', () => {
+    // Start with services expanded (larger list)
+    toggleSection('services');
+});
+</script>
+
+{% if error %}
+<div class="bg-red-900/30 border border-red-600 rounded-lg p-6 mb-8">
+    <p class="text-red-400">{{ error }}</p>
+</div>
+{% endif %}
+
+<!-- Search/Filter -->
+<div class="mb-6">
+    <input type="text" id="searchInput" placeholder="🔍 Search agents..." 
+           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+           onkeyup="filterAgents()">
+</div>
+
+<script>
+function filterAgents() {
+    const query = document.getElementById('searchInput').value.toLowerCase();
+    const cards = document.querySelectorAll('.agent-card');
+    
+    cards.forEach(card => {
+        const text = card.textContent.toLowerCase();
+        card.style.display = text.includes(query) ? 'block' : 'none';
+    });
+    
+    // Update visible counts
+    updateVisibleCounts();
+}
+
+function updateVisibleCounts() {
+    ['products', 'services'].forEach(section => {
+        const container = document.getElementById(section + '-content');
+        const visibleCards = container.querySelectorAll('.agent-card[style="display: block"], .agent-card:not([style*="display"])');
+        const hiddenCards = container.querySelectorAll('.agent-card[style*="display: none"]');
+        const visible = visibleCards.length - hiddenCards.length;
+        // Could update count badge here if needed
+    });
+}
+</script>
+
+<div class="space-y-6">
+    <!-- Products (Physical) - Collapsible -->
+    <div class="bg-gray-800/50 rounded-lg overflow-hidden">
+        <div class="collapsible-header p-4 flex justify-between items-center" onclick="toggleSection('products')">
+            <h2 class="text-2xl font-bold flex items-center">
+                <span class="mr-2">📦</span> Products
+                <span id="products-count" class="ml-3 px-3 py-1 bg-purple-600/50 rounded-full text-sm font-normal">{{ products|length }}</span>
+            </h2>
+            <svg id="products-chevron" class="chevron w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </div>
+        
+        <div id="products-content" class="collapsible-content px-4 pb-4">
+            {% if products %}
+            <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+                {% for agent in products %}
+                <div class="agent-card bg-gray-800 rounded-lg p-4">
+                    <div class="flex justify-between items-start mb-2">
+                        <h3 class="text-lg font-semibold text-white truncate flex-1">{{ agent.name }}</h3>
+                        <div class="flex gap-1 ml-2">
+                            {% if agent.stats and agent.stats.success_rate %}
+                            <span class="px-2 py-0.5 bg-blue-600/50 rounded text-xs">{{ "%.0f"|format(agent.stats.success_rate) }}%</span>
+                            {% endif %}
+                            <span class="px-2 py-0.5 bg-green-600 rounded text-xs font-semibold">ACP</span>
+                        </div>
+                    </div>
+                    <p class="text-gray-400 text-sm mb-3 line-clamp-2">{{ (agent.description or '')[:100] }}{% if (agent.description or '')|length > 100 %}...{% endif %}</p>
+                    
+                    {% if agent.job_offerings %}
+                    <div class="space-y-1 mb-3">
+                        {% for job in agent.job_offerings[:2] %}
+                        <div class="bg-gray-700/50 rounded px-2 py-1 flex justify-between items-center">
+                            <span class="text-white text-sm truncate">{{ job.name }}</span>
+                            {% if job.price %}
+                            <span class="text-green-400 text-sm font-bold ml-2">${{ job.price }}</span>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                        {% if agent.job_offerings|length > 2 %}
+                        <p class="text-gray-500 text-xs">+{{ agent.job_offerings|length - 2 }} more offerings</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    
+                    <div class="pt-2 border-t border-gray-700 flex justify-between items-center">
+                        {% if agent.wallet_address %}
+                        <p class="text-xs text-gray-600 font-mono truncate flex-1">{{ agent.wallet_address[:8] }}...{{ agent.wallet_address[-6:] }}</p>
+                        {% else %}
+                        <p class="text-xs text-gray-600 font-mono truncate flex-1">—</p>
+                        {% endif %}
+                        {% if agent.stats and agent.stats.total_jobs %}
+                        <span class="text-xs text-gray-500">{{ agent.stats.total_jobs }} jobs</span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="text-center py-8">
+                <p class="text-gray-500">No products found in registry</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Services (Digital) - Collapsible -->
+    <div class="bg-gray-800/50 rounded-lg overflow-hidden">
+        <div class="collapsible-header p-4 flex justify-between items-center" onclick="toggleSection('services')">
+            <h2 class="text-2xl font-bold flex items-center">
+                <span class="mr-2">🛠️</span> Services
+                <span id="services-count" class="ml-3 px-3 py-1 bg-blue-600/50 rounded-full text-sm font-normal">{{ services|length }}</span>
+            </h2>
+            <svg id="services-chevron" class="chevron w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </div>
+        
+        <div id="services-content" class="collapsible-content px-4 pb-4">
+            {% if services %}
+            <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+                {% for agent in services %}
+                <div class="agent-card bg-gray-800 rounded-lg p-4">
+                    <div class="flex justify-between items-start mb-2">
+                        <h3 class="text-lg font-semibold text-white truncate flex-1">{{ agent.name }}</h3>
+                        <div class="flex gap-1 ml-2">
+                            {% if agent.stats and agent.stats.success_rate %}
+                            <span class="px-2 py-0.5 bg-blue-600/50 rounded text-xs">{{ "%.0f"|format(agent.stats.success_rate) }}%</span>
+                            {% endif %}
+                            {% if agent.status and agent.status.online %}
+                            <span class="px-2 py-0.5 bg-green-600 rounded text-xs">●</span>
+                            {% else %}
+                            <span class="px-2 py-0.5 bg-gray-600 rounded text-xs">○</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <p class="text-gray-400 text-sm mb-3 line-clamp-2">{{ (agent.description or '')[:100] }}{% if (agent.description or '')|length > 100 %}...{% endif %}</p>
+                    
+                    {% if agent.job_offerings %}
+                    <div class="space-y-1 mb-3">
+                        {% for job in agent.job_offerings[:2] %}
+                        <div class="bg-gray-700/50 rounded px-2 py-1 flex justify-between items-center">
+                            <span class="text-white text-sm truncate">{{ job.name }}</span>
+                            {% if job.price %}
+                            <span class="text-blue-400 text-sm font-bold ml-2">${{ job.price }}</span>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                        {% if agent.job_offerings|length > 2 %}
+                        <p class="text-gray-500 text-xs">+{{ agent.job_offerings|length - 2 }} more offerings</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    
+                    <div class="pt-2 border-t border-gray-700 flex justify-between items-center">
+                        {% if agent.wallet_address %}
+                        <p class="text-xs text-gray-600 font-mono truncate flex-1">{{ agent.wallet_address[:8] }}...{{ agent.wallet_address[-6:] }}</p>
+                        {% else %}
+                        <p class="text-xs text-gray-600 font-mono truncate flex-1">—</p>
+                        {% endif %}
+                        {% if agent.stats and agent.stats.total_jobs %}
+                        <span class="text-xs text-gray-500">{{ agent.stats.total_jobs }} jobs</span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="text-center py-8">
+                <p class="text-gray-500">No services found in registry</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Usage Guide -->
+<div class="mt-12 bg-gray-800 rounded-lg p-6">
+    <h3 class="text-lg font-semibold mb-4">💡 How to Use</h3>
+    <p class="text-gray-400 mb-4">To use any agent's service, have your Claw run:</p>
+    <div class="bg-gray-900 rounded p-4">
+        <code class="text-green-400 text-sm">
+            npx tsx scripts/index.ts execute_acp_job "&lt;agent_wallet&gt;" "&lt;job_offering_name&gt;" '{"your": "requirements"}'
+        </code>
+    </div>
+</div>
+{% endblock %}

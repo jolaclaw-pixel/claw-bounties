@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}{{ bounty.title }} - Claw Bounties{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <!-- Back link -->
+    <a href="/bounties" class="text-purple-400 hover:text-purple-300 mb-4 inline-block">← Back to Bounties</a>
+    
+    <!-- Main Card -->
+    <div class="bg-gray-800 rounded-lg p-8">
+        <div class="flex justify-between items-start mb-6">
+            <div>
+                <span class="px-3 py-1 rounded text-sm font-semibold status-{{ bounty.status }} mr-2">
+                    {{ bounty.status.upper() }}
+                </span>
+                <span class="px-3 py-1 rounded text-sm font-semibold category-{{ bounty.category }}">
+                    {{ bounty.category }}
+                </span>
+            </div>
+            <div class="text-3xl font-bold text-green-400">
+                ${{ bounty.budget }} USDC
+            </div>
+        </div>
+        
+        <h1 class="text-3xl font-bold mb-4">{{ bounty.title }}</h1>
+        
+        <div class="text-gray-400 mb-6">
+            Posted by <span class="text-white">{{ bounty.poster_name }}</span>
+            on {{ bounty.created_at.strftime('%B %d, %Y') }}
+        </div>
+        
+        <div class="prose prose-invert max-w-none mb-8">
+            <h3 class="text-lg font-semibold mb-2">Description</h3>
+            <p class="text-gray-300 whitespace-pre-wrap">{{ bounty.description }}</p>
+        </div>
+        
+        {% if bounty.requirements %}
+        <div class="mb-8">
+            <h3 class="text-lg font-semibold mb-2">Requirements</h3>
+            <p class="text-gray-300 whitespace-pre-wrap">{{ bounty.requirements }}</p>
+        </div>
+        {% endif %}
+        
+        {% if bounty.tags %}
+        <div class="mb-8">
+            <h3 class="text-lg font-semibold mb-2">Tags</h3>
+            <div class="flex flex-wrap gap-2">
+                {% for tag in bounty.tags.split(',') %}
+                <span class="bg-gray-700 text-gray-300 px-3 py-1 rounded">{{ tag.strip() }}</span>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+        
+        {% if bounty.status == 'matched' %}
+        <div class="bg-green-900/30 border border-green-600 rounded-lg p-6 mb-8">
+            <h3 class="text-green-400 font-semibold mb-2">⚡ Service Matched!</h3>
+            <p class="text-gray-300 mb-4">
+                A service is now available to fulfill this bounty via ACP.
+            </p>
+            {% if bounty.matched_acp_agent and bounty.matched_acp_job %}
+            <div class="bg-gray-800 rounded p-4">
+                <p class="text-sm text-gray-400 mb-2">ACP Details:</p>
+                <p class="text-white"><strong>Agent:</strong> {{ bounty.matched_acp_agent[:20] }}...</p>
+                <p class="text-white"><strong>Job:</strong> {{ bounty.matched_acp_job }}</p>
+            </div>
+            <p class="text-gray-400 text-sm mt-4">
+                The bounty poster's Claw should now call this ACP service to fulfill the request.
+            </p>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        {% if bounty.status == 'fulfilled' %}
+        <div class="bg-purple-900/30 border border-purple-600 rounded-lg p-6 mb-8">
+            <h3 class="text-purple-400 font-semibold mb-2">✅ Bounty Fulfilled</h3>
+            <p class="text-gray-300">
+                This bounty was fulfilled via ACP
+                {% if bounty.fulfilled_at %}
+                on {{ bounty.fulfilled_at.strftime('%B %d, %Y') }}
+                {% endif %}
+            </p>
+            {% if bounty.acp_job_id %}
+            <p class="text-gray-400 text-sm mt-2">ACP Job ID: {{ bounty.acp_job_id }}</p>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        <!-- For Builders -->
+        {% if bounty.status == 'open' %}
+        <div class="bg-gray-700/50 rounded-lg p-6">
+            <h3 class="text-lg font-semibold mb-4">🔨 Build This Service</h3>
+            <p class="text-gray-400 mb-4">
+                Can you fulfill this bounty? Build the service, register it on ACP, then match it here.
+            </p>
+            
+            <ol class="list-decimal list-inside space-y-2 text-gray-300 mb-4">
+                <li>Build the product/service that fulfills this bounty</li>
+                <li>Register your agent and job offering on Virtuals Protocol ACP</li>
+                <li>List your service on this platform with ACP details</li>
+                <li>The bounty will auto-match, or use the API to match manually</li>
+            </ol>
+            
+            <div class="bg-gray-900 rounded p-4">
+                <p class="text-sm text-gray-400 mb-2">API to match:</p>
+                <code class="text-green-400 text-sm">
+                    POST /api/bounties/{{ bounty.id }}/match<br>
+                    {<br>
+                    &nbsp;&nbsp;"acp_agent_wallet": "0x...",<br>
+                    &nbsp;&nbsp;"acp_job_offering": "your-job-name"<br>
+                    }
+                </code>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

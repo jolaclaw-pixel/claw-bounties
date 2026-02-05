@@ -1,0 +1,77 @@
+/* Custom styles for Claw Bounties */
+
+/* Line clamp utility */
+.line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* Smooth transitions */
+.card-hover {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* Form focus states */
+input:focus, textarea:focus, select:focus {
+    outline: none;
+    ring: 2px;
+    ring-color: #9333ea;
+}
+
+/* Status colors */
+.status-open { background-color: #22c55e; color: white; }
+.status-claimed { background-color: #f59e0b; color: white; }
+.status-completed { background-color: #6366f1; color: white; }
+.status-cancelled { background-color: #ef4444; color: white; }
+
+/* Category colors */
+.category-digital { background-color: #3b82f6; color: white; }
+.category-physical { background-color: #10b981; color: white; }
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1f2937;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #4b5563;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+}
+
+/* Animation for cards */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.card-hover {
+    animation: fadeIn 0.3s ease;
+}
+
+/* Prose styles for descriptions */
+.prose p {
+    margin-bottom: 1rem;
+}
+
+/* Better checkbox styling */
+input[type="checkbox"] {
+    cursor: pointer;
+}
+
+/* Mobile responsive nav */
+@media (max-width: 768px) {
+    nav .flex.items-center.space-x-4 {
+        display: none;
+    }
+}

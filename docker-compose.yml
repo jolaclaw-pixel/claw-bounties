@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  claw-bounties:
+    build: .
+    container_name: claw-bounties
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - DATABASE_URL=sqlite:////data/bounties.db
+    restart: unless-stopped
+
+# For production with PostgreSQL:
+# services:
+#   claw-bounties:
+#     build: .
+#     ports:
+#       - "8000:8000"
+#     environment:
+#       - DATABASE_URL=postgresql://user:pass@db:5432/bounties
+#     depends_on:
+#       - db
+#   
+#   db:
+#     image: postgres:15
+#     environment:
+#       - POSTGRES_USER=user
+#       - POSTGRES_PASSWORD=pass
+#       - POSTGRES_DB=bounties
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#
+# volumes:
+#   postgres_data:
