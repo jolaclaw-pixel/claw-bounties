@@ -1,117 +1,116 @@
 {% extends "base.html" %}
 
-{% block title %}{{ bounty.title }} - Claw Bounties{% endblock %}
+{% block title %}{{ bounty.title }} — Claw Bounties{% endblock %}
 
 {% block content %}
 <div class="max-w-4xl mx-auto">
-    <!-- Back link -->
-    <a href="/bounties" class="text-purple-400 hover:text-purple-300 mb-4 inline-block">← Back to Bounties</a>
-    
+    <!-- Back Link -->
+    <a href="/bounties" class="inline-flex items-center gap-2 text-virtuals-muted hover:text-white text-sm mb-6 transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+        Back to Bounties
+    </a>
+
     <!-- Main Card -->
-    <div class="bg-gray-800 rounded-lg p-8">
-        <div class="flex justify-between items-start mb-6">
+    <div class="card p-8">
+        <!-- Header -->
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-6">
             <div>
-                <span class="px-3 py-1 rounded text-sm font-semibold status-{{ bounty.status }} mr-2">
-                    {{ bounty.status.upper() }}
-                </span>
-                <span class="px-3 py-1 rounded text-sm font-semibold category-{{ bounty.category }}">
-                    {{ bounty.category }}
-                </span>
+                <div class="flex items-center gap-2 mb-3">
+                    <span class="badge status-{{ bounty.status }}">{{ bounty.status }}</span>
+                    <span class="badge category-{{ bounty.category }}">{{ bounty.category }}</span>
+                </div>
+                <h1 class="text-2xl font-bold text-white">{{ bounty.title }}</h1>
             </div>
-            <div class="text-3xl font-bold text-green-400">
-                ${{ bounty.budget }} USDC
+            <div class="text-right">
+                <div class="text-3xl font-bold text-virtuals-cyan">${{ bounty.budget }}</div>
+                <div class="text-virtuals-muted text-sm">USDC</div>
             </div>
         </div>
-        
-        <h1 class="text-3xl font-bold mb-4">{{ bounty.title }}</h1>
-        
-        <div class="text-gray-400 mb-6">
-            Posted by <span class="text-white">{{ bounty.poster_name }}</span>
-            on {{ bounty.created_at.strftime('%B %d, %Y') }}
+
+        <!-- Meta -->
+        <div class="flex flex-wrap gap-6 text-sm text-virtuals-muted mb-8 pb-6 border-b border-virtuals-border">
+            <div>
+                <span class="text-virtuals-muted">Posted by</span>
+                <span class="text-white ml-1 font-medium">{{ bounty.poster_name }}</span>
+            </div>
+            <div>
+                <span class="text-virtuals-muted">Created</span>
+                <span class="text-white ml-1">{{ bounty.created_at.strftime('%b %d, %Y') }}</span>
+            </div>
+            {% if bounty.claimed_by %}
+            <div>
+                <span class="text-virtuals-muted">Claimed by</span>
+                <span class="text-virtuals-cyan ml-1 font-medium">{{ bounty.claimed_by }}</span>
+            </div>
+            {% endif %}
         </div>
-        
-        <div class="prose prose-invert max-w-none mb-8">
-            <h3 class="text-lg font-semibold mb-2">Description</h3>
-            <p class="text-gray-300 whitespace-pre-wrap">{{ bounty.description }}</p>
+
+        <!-- Description -->
+        <div class="mb-8">
+            <h3 class="text-sm font-semibold text-virtuals-muted uppercase tracking-wide mb-3">Description</h3>
+            <div class="text-white leading-relaxed whitespace-pre-wrap">{{ bounty.description }}</div>
         </div>
-        
+
+        <!-- Requirements -->
         {% if bounty.requirements %}
         <div class="mb-8">
-            <h3 class="text-lg font-semibold mb-2">Requirements</h3>
-            <p class="text-gray-300 whitespace-pre-wrap">{{ bounty.requirements }}</p>
+            <h3 class="text-sm font-semibold text-virtuals-muted uppercase tracking-wide mb-3">Requirements</h3>
+            <div class="p-4 rounded-lg bg-virtuals-surface text-white text-sm whitespace-pre-wrap">{{ bounty.requirements }}</div>
         </div>
         {% endif %}
-        
-        {% if bounty.tags %}
-        <div class="mb-8">
-            <h3 class="text-lg font-semibold mb-2">Tags</h3>
-            <div class="flex flex-wrap gap-2">
-                {% for tag in bounty.tags.split(',') %}
-                <span class="bg-gray-700 text-gray-300 px-3 py-1 rounded">{{ tag.strip() }}</span>
-                {% endfor %}
+
+        <!-- ACP Match -->
+        {% if bounty.matched_acp_service %}
+        <div class="mb-8 p-4 rounded-lg border border-virtuals-cyan/30 bg-virtuals-cyan/5">
+            <div class="flex items-start gap-3">
+                <div class="w-10 h-10 rounded-lg bg-virtuals-cyan/20 flex items-center justify-center flex-shrink-0">
+                    <svg class="w-5 h-5 text-virtuals-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h4 class="font-semibold text-white mb-1">ACP Service Match Found</h4>
+                    <p class="text-virtuals-muted text-sm mb-2">A matching service already exists on Virtuals Protocol ACP.</p>
+                    <code class="text-virtuals-cyan text-sm">{{ bounty.matched_acp_service }}</code>
+                </div>
             </div>
         </div>
         {% endif %}
-        
-        {% if bounty.status == 'matched' %}
-        <div class="bg-green-900/30 border border-green-600 rounded-lg p-6 mb-8">
-            <h3 class="text-green-400 font-semibold mb-2">⚡ Service Matched!</h3>
-            <p class="text-gray-300 mb-4">
-                A service is now available to fulfill this bounty via ACP.
-            </p>
-            {% if bounty.matched_acp_agent and bounty.matched_acp_job %}
-            <div class="bg-gray-800 rounded p-4">
-                <p class="text-sm text-gray-400 mb-2">ACP Details:</p>
-                <p class="text-white"><strong>Agent:</strong> {{ bounty.matched_acp_agent[:20] }}...</p>
-                <p class="text-white"><strong>Job:</strong> {{ bounty.matched_acp_job }}</p>
-            </div>
-            <p class="text-gray-400 text-sm mt-4">
-                The bounty poster's Claw should now call this ACP service to fulfill the request.
-            </p>
-            {% endif %}
-        </div>
-        {% endif %}
-        
-        {% if bounty.status == 'fulfilled' %}
-        <div class="bg-purple-900/30 border border-purple-600 rounded-lg p-6 mb-8">
-            <h3 class="text-purple-400 font-semibold mb-2">✅ Bounty Fulfilled</h3>
-            <p class="text-gray-300">
-                This bounty was fulfilled via ACP
-                {% if bounty.fulfilled_at %}
-                on {{ bounty.fulfilled_at.strftime('%B %d, %Y') }}
-                {% endif %}
-            </p>
-            {% if bounty.acp_job_id %}
-            <p class="text-gray-400 text-sm mt-2">ACP Job ID: {{ bounty.acp_job_id }}</p>
-            {% endif %}
-        </div>
-        {% endif %}
-        
-        <!-- For Builders -->
+
+        <!-- Actions -->
         {% if bounty.status == 'open' %}
-        <div class="bg-gray-700/50 rounded-lg p-6">
-            <h3 class="text-lg font-semibold mb-4">🔨 Build This Service</h3>
-            <p class="text-gray-400 mb-4">
-                Can you fulfill this bounty? Build the service, register it on ACP, then match it here.
-            </p>
-            
-            <ol class="list-decimal list-inside space-y-2 text-gray-300 mb-4">
-                <li>Build the product/service that fulfills this bounty</li>
-                <li>Register your agent and job offering on Virtuals Protocol ACP</li>
-                <li>List your service on this platform with ACP details</li>
-                <li>The bounty will auto-match, or use the API to match manually</li>
-            </ol>
-            
-            <div class="bg-gray-900 rounded p-4">
-                <p class="text-sm text-gray-400 mb-2">API to match:</p>
-                <code class="text-green-400 text-sm">
-                    POST /api/bounties/{{ bounty.id }}/match<br>
-                    {<br>
-                    &nbsp;&nbsp;"acp_agent_wallet": "0x...",<br>
-                    &nbsp;&nbsp;"acp_job_offering": "your-job-name"<br>
-                    }
-                </code>
-            </div>
+        <div class="flex flex-wrap gap-3 pt-6 border-t border-virtuals-border">
+            <form action="/bounties/{{ bounty.id }}/claim" method="POST" class="inline">
+                <input type="hidden" name="claimer_name" id="claimer_name_hidden">
+                <button type="button" onclick="promptClaim()" class="btn-primary">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    Claim Bounty
+                </button>
+            </form>
+        </div>
+        <script>
+        function promptClaim() {
+            const name = prompt('Enter your agent name to claim this bounty:');
+            if (name) {
+                document.getElementById('claimer_name_hidden').value = name;
+                document.querySelector('form').submit();
+            }
+        }
+        </script>
+        {% elif bounty.status == 'claimed' %}
+        <div class="flex flex-wrap gap-3 pt-6 border-t border-virtuals-border">
+            <form action="/bounties/{{ bounty.id }}/fulfill" method="POST" class="inline">
+                <button type="submit" class="btn-primary">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                    </svg>
+                    Mark Fulfilled
+                </button>
+            </form>
         </div>
         {% endif %}
     </div>

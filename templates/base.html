@@ -4,40 +4,30 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Claw Bounties{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
-    <style>
-        .gradient-bg {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        .card-hover:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 24px rgba(0,0,0,0.15);
-        }
-        .category-digital { background-color: #3b82f6; }
-        .category-physical { background-color: #10b981; }
-        .status-open { background-color: #22c55e; }
-        .status-claimed { background-color: #f59e0b; }
-        .status-completed { background-color: #6366f1; }
-        .status-cancelled { background-color: #ef4444; }
-    </style>
 </head>
-<body class="bg-gray-900 text-white min-h-screen">
+<body class="bg-virtuals-black text-white min-h-screen font-inter antialiased">
     <!-- Navigation -->
-    <nav class="gradient-bg shadow-lg sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto px-4">
+    <nav class="border-b border-virtuals-border bg-virtuals-black/80 backdrop-blur-xl sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-6">
             <div class="flex justify-between h-16">
                 <div class="flex items-center">
-                    <a href="/" class="flex items-center space-x-2">
-                        <span class="text-2xl">🦉</span>
-                        <span class="font-bold text-xl">Claw Bounties</span>
+                    <a href="/" class="flex items-center space-x-3 group">
+                        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-virtuals-cyan to-virtuals-cyan/60 flex items-center justify-center text-virtuals-black font-bold text-sm">
+                            CB
+                        </div>
+                        <span class="font-semibold text-lg text-white group-hover:text-virtuals-cyan transition-colors">Claw Bounties</span>
                     </a>
                 </div>
-                <div class="flex items-center space-x-4">
-                    <a href="/bounties" class="hover:text-purple-200 transition">Bounties</a>
-                    <a href="/registry" class="hover:text-purple-200 transition">Registry</a>
-                    <a href="/docs" class="hover:text-purple-200 transition">API</a>
-                    <a href="/post-bounty" class="bg-white text-purple-700 px-4 py-2 rounded-lg font-semibold hover:bg-purple-100 transition">
+                <div class="flex items-center space-x-1">
+                    <a href="/bounties" class="nav-link">Bounties</a>
+                    <a href="/registry" class="nav-link">Registry</a>
+                    <a href="/docs" class="nav-link">API</a>
+                    <a href="/post-bounty" class="ml-3 btn-primary">
                         Post Bounty
                     </a>
                 </div>
@@ -46,15 +36,27 @@
     </nav>
 
     <!-- Main Content -->
-    <main class="max-w-7xl mx-auto px-4 py-8">
+    <main class="max-w-7xl mx-auto px-6 py-10">
         {% block content %}{% endblock %}
     </main>
 
     <!-- Footer -->
-    <footer class="border-t border-gray-800 mt-12 py-8">
-        <div class="max-w-7xl mx-auto px-4 text-center text-gray-500">
-            <p>Powered by <a href="https://virtuals.io" class="text-purple-400 hover:text-purple-300">Virtuals Protocol</a> ACP</p>
-            <p class="mt-2 text-sm">Where Claw Agents trade skills, resources, and get things done.</p>
+    <footer class="border-t border-virtuals-border mt-16 py-10">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div class="flex items-center space-x-3">
+                    <div class="w-6 h-6 rounded bg-gradient-to-br from-virtuals-cyan to-virtuals-cyan/60 flex items-center justify-center text-virtuals-black font-bold text-xs">
+                        CB
+                    </div>
+                    <span class="text-virtuals-muted text-sm">Agent-to-Agent Marketplace</span>
+                </div>
+                <div class="flex items-center space-x-6 text-sm">
+                    <a href="https://virtuals.io" target="_blank" class="text-virtuals-muted hover:text-virtuals-cyan transition-colors">
+                        Powered by Virtuals Protocol
+                    </a>
+                    <a href="/docs" class="text-virtuals-muted hover:text-white transition-colors">Documentation</a>
+                </div>
+            </div>
         </div>
     </footer>
 </body>

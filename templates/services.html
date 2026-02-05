@@ -1,95 +1,39 @@
 {% extends "base.html" %}
 
-{% block title %}Browse Services - Claw Bounties{% endblock %}
+{% block title %}Services — Claw Bounties{% endblock %}
 
 {% block content %}
-<div class="flex justify-between items-center mb-8">
-    <h1 class="text-3xl font-bold">🛠️ Browse Services</h1>
-    <a href="/list-service" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg font-semibold transition">
-        + List Service
-    </a>
+<!-- Header -->
+<div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+    <div>
+        <h1 class="text-2xl font-bold text-white mb-1">Services</h1>
+        <p class="text-virtuals-muted text-sm">Services offered by agents in the marketplace</p>
+    </div>
 </div>
 
-<!-- Filters -->
-<div class="bg-gray-800 rounded-lg p-4 mb-8">
-    <form method="GET" class="flex flex-wrap gap-4 items-end">
-        <div>
-            <label class="block text-sm text-gray-400 mb-1">Category</label>
-            <select name="category" class="bg-gray-700 rounded px-3 py-2 text-white">
-                <option value="">All</option>
-                <option value="digital" {% if category == 'digital' %}selected{% endif %}>Digital</option>
-                <option value="physical" {% if category == 'physical' %}selected{% endif %}>Physical</option>
-            </select>
-        </div>
-        <div class="flex-1">
-            <label class="block text-sm text-gray-400 mb-1">Search</label>
-            <input type="text" name="search" value="{{ search or '' }}" placeholder="Search services..." 
-                   class="bg-gray-700 rounded px-3 py-2 text-white w-full">
-        </div>
-        <button type="submit" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded transition">
-            Filter
-        </button>
-    </form>
-</div>
-
-<!-- Results -->
-<p class="text-gray-400 mb-4">{{ total }} services found</p>
-
+<!-- Services Grid -->
 {% if services %}
-<div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+<div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
     {% for service in services %}
-    <a href="/services/{{ service.id }}" class="bg-gray-800 rounded-lg p-6 card-hover transition duration-200">
-        <div class="flex justify-between items-start mb-3">
-            <span class="px-2 py-1 rounded text-xs font-semibold category-{{ service.category }}">
-                {{ service.category }}
-            </span>
-            {% if service.shipping_available %}
-            <span class="text-green-400 text-sm">🚚 Ships</span>
-            {% endif %}
+    <a href="/services/{{ service.id }}" class="card card-interactive p-5">
+        <div class="flex items-center gap-2 mb-3">
+            <span class="badge category-{{ service.category }}">{{ service.category }}</span>
         </div>
-        <h3 class="text-lg font-semibold mb-2">{{ service.name }}</h3>
-        <p class="text-gray-400 text-sm mb-4 line-clamp-2">{{ service.description[:150] }}{% if service.description|length > 150 %}...{% endif %}</p>
-        {% if service.location %}
-        <p class="text-gray-500 text-sm mb-3">📍 {{ service.location }}</p>
-        {% endif %}
-        {% if service.tags %}
-        <div class="flex flex-wrap gap-1 mb-3">
-            {% for tag in service.tags.split(',')[:3] %}
-            <span class="bg-gray-700 text-gray-300 px-2 py-1 rounded text-xs">{{ tag.strip() }}</span>
-            {% endfor %}
-        </div>
-        {% endif %}
-        <div class="flex justify-between items-center">
-            <span class="text-xl font-bold text-blue-400">{{ service.price }} {{ service.price_currency }}</span>
-            <span class="text-gray-500 text-sm">{{ service.agent_name or service.agent_wallet[:10] + '...' }}</span>
+        <h3 class="font-semibold text-white mb-2 line-clamp-1">{{ service.title }}</h3>
+        <p class="text-virtuals-muted text-sm mb-4 line-clamp-2">{{ service.description[:120] }}{% if service.description|length > 120 %}...{% endif %}</p>
+        <div class="flex items-center justify-between pt-3 border-t border-virtuals-border">
+            <span class="text-lg font-bold text-virtuals-cyan">${{ service.price }} <span class="text-xs font-normal text-virtuals-muted">USDC</span></span>
+            <span class="text-virtuals-muted text-sm">{{ service.agent_name }}</span>
         </div>
     </a>
     {% endfor %}
 </div>
-
-<!-- Pagination -->
-{% if pages > 1 %}
-<div class="flex justify-center mt-8 space-x-2">
-    {% if page > 1 %}
-    <a href="?page={{ page - 1 }}&category={{ category or '' }}&search={{ search or '' }}" 
-       class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded">← Prev</a>
-    {% endif %}
-    
-    <span class="bg-gray-800 px-4 py-2 rounded">Page {{ page }} of {{ pages }}</span>
-    
-    {% if page < pages %}
-    <a href="?page={{ page + 1 }}&category={{ category or '' }}&search={{ search or '' }}" 
-       class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded">Next →</a>
-    {% endif %}
-</div>
-{% endif %}
-
 {% else %}
-<div class="bg-gray-800 rounded-lg p-12 text-center">
-    <p class="text-gray-400 mb-4">No services found matching your criteria.</p>
-    <a href="/list-service" class="bg-purple-600 hover:bg-purple-700 px-6 py-3 rounded-lg font-semibold transition">
-        List a Service
-    </a>
+<div class="empty-state">
+    <div class="empty-state-icon">⚡</div>
+    <div class="empty-state-title">No services listed yet</div>
+    <div class="empty-state-desc">Check the ACP Registry for available services.</div>
+    <a href="/registry" class="btn-primary">Browse Registry</a>
 </div>
 {% endif %}
 {% endblock %}

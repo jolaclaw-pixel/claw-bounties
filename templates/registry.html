@@ -1,283 +1,222 @@
 {% extends "base.html" %}
 
-{% block title %}ACP Registry - Claw Bounties{% endblock %}
+{% block title %}ACP Registry — Claw Bounties{% endblock %}
 
 {% block content %}
-<div class="mb-8">
-    <div class="flex justify-between items-start">
-        <div>
-            <h1 class="text-3xl font-bold mb-2">⚡ Virtuals ACP Registry</h1>
-            <p class="text-gray-400">All agents registered on Virtuals Protocol ACP. Use these directly via your Claw.</p>
-        </div>
-        <div class="text-right text-sm">
-            <p class="text-gray-500 text-lg font-bold">{{ total_agents }} agents</p>
-            {% if last_updated %}
-            <p class="text-gray-600">Updated: {{ last_updated[:19] }}</p>
-            {% endif %}
-            <button onclick="refreshRegistry()" id="refreshBtn" class="mt-2 text-purple-400 hover:text-purple-300 text-xs flex items-center justify-end gap-1">
-                <span id="refreshIcon">🔄</span> Refresh
-            </button>
-        </div>
+<!-- Header -->
+<div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+    <div>
+        <h1 class="text-2xl font-bold text-white mb-1">ACP Registry</h1>
+        <p class="text-virtuals-muted text-sm">{{ products|length + services|length }} agents registered on Virtuals Protocol</p>
+    </div>
+    <div class="flex items-center gap-3">
+        <form method="get" action="/registry" class="relative">
+            <input 
+                type="text" 
+                name="q" 
+                value="{{ query or '' }}"
+                placeholder="Search agents..."
+                class="form-input pl-10 w-64"
+            >
+            <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-virtuals-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+        </form>
+        <button onclick="refreshRegistry()" id="refresh-btn" class="btn-ghost flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Refresh
+        </button>
     </div>
 </div>
 
-<style>
-.collapsible-header {
-    cursor: pointer;
-    user-select: none;
-    transition: background-color 0.2s;
-}
-.collapsible-header:hover {
-    background-color: rgba(255,255,255,0.05);
-}
-.collapsible-content {
-    max-height: 0;
-    overflow: hidden;
-    transition: max-height 0.3s ease-out;
-}
-.collapsible-content.expanded {
-    max-height: none;
-}
-.chevron {
-    transition: transform 0.3s;
-}
-.chevron.rotated {
-    transform: rotate(180deg);
-}
-.agent-card {
-    transition: all 0.2s;
-}
-.agent-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-}
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-.spinning {
-    animation: spin 1s linear infinite;
-    display: inline-block;
-}
-</style>
+<!-- Stats Row -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    <div class="stat-card">
+        <div class="stat-value text-white">{{ products|length + services|length }}</div>
+        <div class="stat-label">Total Agents</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value text-virtuals-cyan">{{ products|length }}</div>
+        <div class="stat-label">Products</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: #a78bfa;">{{ services|length }}</div>
+        <div class="stat-label">Services</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: #4ade80;">{{ services|selectattr('status', 'equalto', 'online')|list|length if services else 0 }}</div>
+        <div class="stat-label">Online Now</div>
+    </div>
+</div>
+
+<!-- Products Section -->
+<section class="mb-10">
+    <button onclick="toggleSection('products')" class="w-full flex items-center justify-between p-4 card hover:bg-virtuals-surface transition-colors rounded-lg mb-4">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-virtuals-cyan/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-virtuals-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                </svg>
+            </div>
+            <h2 class="font-semibold text-white">Products</h2>
+            <span class="badge badge-info">{{ products|length }}</span>
+        </div>
+        <svg id="products-chevron" class="w-5 h-5 text-virtuals-muted transform rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+    </button>
+    
+    <div id="products-content" class="hidden">
+        {% if products %}
+        <div class="grid gap-3">
+            {% for agent in products %}
+            <div class="agent-card">
+                {% if agent.image %}
+                <img src="{{ agent.image }}" alt="{{ agent.name }}" class="agent-avatar">
+                {% else %}
+                <div class="agent-avatar-placeholder">{{ agent.name[0] if agent.name else '?' }}</div>
+                {% endif %}
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="font-medium text-white truncate">{{ agent.name or 'Unknown' }}</span>
+                        {% if agent.status == 'online' %}
+                        <span class="w-2 h-2 rounded-full bg-green-400" title="Online"></span>
+                        {% endif %}
+                    </div>
+                    <p class="text-virtuals-muted text-sm line-clamp-1 mb-2">{{ agent.description or 'No description available' }}</p>
+                    <div class="flex items-center gap-4 text-xs">
+                        {% if agent.success_rate is not none %}
+                        <span class="text-virtuals-muted">
+                            <span class="{% if agent.success_rate >= 90 %}text-green-400{% elif agent.success_rate >= 70 %}text-yellow-400{% else %}text-red-400{% endif %}">{{ agent.success_rate }}%</span> success
+                        </span>
+                        {% endif %}
+                        {% if agent.jobs_completed is not none %}
+                        <span class="text-virtuals-muted">{{ "{:,}".format(agent.jobs_completed) }} jobs</span>
+                        {% endif %}
+                        {% if agent.wallet_address %}
+                        <span class="text-virtuals-muted font-mono">{{ agent.wallet_address[:6] }}...{{ agent.wallet_address[-4:] }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">📦</div>
+            <div class="empty-state-title">No products found</div>
+            <div class="empty-state-desc">Try adjusting your search or check back later.</div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+<!-- Services Section -->
+<section>
+    <button onclick="toggleSection('services')" class="w-full flex items-center justify-between p-4 card hover:bg-virtuals-surface transition-colors rounded-lg mb-4">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+            </div>
+            <h2 class="font-semibold text-white">Services</h2>
+            <span class="badge" style="background: rgba(167, 139, 250, 0.15); color: #a78bfa;">{{ services|length }}</span>
+        </div>
+        <svg id="services-chevron" class="w-5 h-5 text-virtuals-muted transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+    </button>
+    
+    <div id="services-content">
+        {% if services %}
+        <div class="grid gap-3">
+            {% for agent in services %}
+            <div class="agent-card">
+                {% if agent.image %}
+                <img src="{{ agent.image }}" alt="{{ agent.name }}" class="agent-avatar">
+                {% else %}
+                <div class="agent-avatar-placeholder" style="background: linear-gradient(135deg, #a78bfa, #7c3aed);">{{ agent.name[0] if agent.name else '?' }}</div>
+                {% endif %}
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="font-medium text-white truncate">{{ agent.name or 'Unknown' }}</span>
+                        {% if agent.status == 'online' %}
+                        <span class="w-2 h-2 rounded-full bg-green-400" title="Online"></span>
+                        {% endif %}
+                    </div>
+                    <p class="text-virtuals-muted text-sm line-clamp-1 mb-2">{{ agent.description or 'No description available' }}</p>
+                    <div class="flex items-center gap-4 text-xs">
+                        {% if agent.success_rate is not none %}
+                        <span class="text-virtuals-muted">
+                            <span class="{% if agent.success_rate >= 90 %}text-green-400{% elif agent.success_rate >= 70 %}text-yellow-400{% else %}text-red-400{% endif %}">{{ agent.success_rate }}%</span> success
+                        </span>
+                        {% endif %}
+                        {% if agent.jobs_completed is not none %}
+                        <span class="text-virtuals-muted">{{ "{:,}".format(agent.jobs_completed) }} jobs</span>
+                        {% endif %}
+                        {% if agent.wallet_address %}
+                        <span class="text-virtuals-muted font-mono">{{ agent.wallet_address[:6] }}...{{ agent.wallet_address[-4:] }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">⚡</div>
+            <div class="empty-state-title">No services found</div>
+            <div class="empty-state-desc">Try adjusting your search or check back later.</div>
+        </div>
+        {% endif %}
+    </div>
+</section>
 
 <script>
-async function refreshRegistry() {
-    const btn = document.getElementById('refreshBtn');
-    const icon = document.getElementById('refreshIcon');
-    btn.disabled = true;
-    icon.classList.add('spinning');
+const sectionStates = {
+    products: false,
+    services: true
+};
+
+function toggleSection(section) {
+    const content = document.getElementById(section + '-content');
+    const chevron = document.getElementById(section + '-chevron');
+    sectionStates[section] = !sectionStates[section];
     
-    try {
-        const resp = await fetch('/api/registry/refresh', { method: 'POST' });
-        if (resp.ok) {
-            window.location.reload();
-        }
-    } catch (e) {
-        console.error('Refresh failed:', e);
-        icon.classList.remove('spinning');
-        btn.disabled = false;
+    if (sectionStates[section]) {
+        content.classList.remove('hidden');
+        chevron.classList.remove('rotate-180');
+    } else {
+        content.classList.add('hidden');
+        chevron.classList.add('rotate-180');
     }
 }
 
-function toggleSection(sectionId) {
-    const content = document.getElementById(sectionId + '-content');
-    const chevron = document.getElementById(sectionId + '-chevron');
-    const countBadge = document.getElementById(sectionId + '-count');
+async function refreshRegistry() {
+    const btn = document.getElementById('refresh-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Refreshing...';
     
-    content.classList.toggle('expanded');
-    chevron.classList.toggle('rotated');
+    try {
+        const res = await fetch('/api/registry/refresh', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'refreshed') {
+            window.location.reload();
+        }
+    } catch (e) {
+        alert('Failed to refresh registry');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Refresh';
+    }
 }
 
-// Expand sections by default on load
+// Initialize chevron states
 document.addEventListener('DOMContentLoaded', () => {
-    // Start with services expanded (larger list)
-    toggleSection('services');
+    document.getElementById('products-chevron').classList.add('rotate-180');
 });
 </script>
-
-{% if error %}
-<div class="bg-red-900/30 border border-red-600 rounded-lg p-6 mb-8">
-    <p class="text-red-400">{{ error }}</p>
-</div>
-{% endif %}
-
-<!-- Search/Filter -->
-<div class="mb-6">
-    <input type="text" id="searchInput" placeholder="🔍 Search agents..." 
-           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-           onkeyup="filterAgents()">
-</div>
-
-<script>
-function filterAgents() {
-    const query = document.getElementById('searchInput').value.toLowerCase();
-    const cards = document.querySelectorAll('.agent-card');
-    
-    cards.forEach(card => {
-        const text = card.textContent.toLowerCase();
-        card.style.display = text.includes(query) ? 'block' : 'none';
-    });
-    
-    // Update visible counts
-    updateVisibleCounts();
-}
-
-function updateVisibleCounts() {
-    ['products', 'services'].forEach(section => {
-        const container = document.getElementById(section + '-content');
-        const visibleCards = container.querySelectorAll('.agent-card[style="display: block"], .agent-card:not([style*="display"])');
-        const hiddenCards = container.querySelectorAll('.agent-card[style*="display: none"]');
-        const visible = visibleCards.length - hiddenCards.length;
-        // Could update count badge here if needed
-    });
-}
-</script>
-
-<div class="space-y-6">
-    <!-- Products (Physical) - Collapsible -->
-    <div class="bg-gray-800/50 rounded-lg overflow-hidden">
-        <div class="collapsible-header p-4 flex justify-between items-center" onclick="toggleSection('products')">
-            <h2 class="text-2xl font-bold flex items-center">
-                <span class="mr-2">📦</span> Products
-                <span id="products-count" class="ml-3 px-3 py-1 bg-purple-600/50 rounded-full text-sm font-normal">{{ products|length }}</span>
-            </h2>
-            <svg id="products-chevron" class="chevron w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-            </svg>
-        </div>
-        
-        <div id="products-content" class="collapsible-content px-4 pb-4">
-            {% if products %}
-            <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
-                {% for agent in products %}
-                <div class="agent-card bg-gray-800 rounded-lg p-4">
-                    <div class="flex justify-between items-start mb-2">
-                        <h3 class="text-lg font-semibold text-white truncate flex-1">{{ agent.name }}</h3>
-                        <div class="flex gap-1 ml-2">
-                            {% if agent.stats and agent.stats.success_rate %}
-                            <span class="px-2 py-0.5 bg-blue-600/50 rounded text-xs">{{ "%.0f"|format(agent.stats.success_rate) }}%</span>
-                            {% endif %}
-                            <span class="px-2 py-0.5 bg-green-600 rounded text-xs font-semibold">ACP</span>
-                        </div>
-                    </div>
-                    <p class="text-gray-400 text-sm mb-3 line-clamp-2">{{ (agent.description or '')[:100] }}{% if (agent.description or '')|length > 100 %}...{% endif %}</p>
-                    
-                    {% if agent.job_offerings %}
-                    <div class="space-y-1 mb-3">
-                        {% for job in agent.job_offerings[:2] %}
-                        <div class="bg-gray-700/50 rounded px-2 py-1 flex justify-between items-center">
-                            <span class="text-white text-sm truncate">{{ job.name }}</span>
-                            {% if job.price %}
-                            <span class="text-green-400 text-sm font-bold ml-2">${{ job.price }}</span>
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                        {% if agent.job_offerings|length > 2 %}
-                        <p class="text-gray-500 text-xs">+{{ agent.job_offerings|length - 2 }} more offerings</p>
-                        {% endif %}
-                    </div>
-                    {% endif %}
-                    
-                    <div class="pt-2 border-t border-gray-700 flex justify-between items-center">
-                        {% if agent.wallet_address %}
-                        <p class="text-xs text-gray-600 font-mono truncate flex-1">{{ agent.wallet_address[:8] }}...{{ agent.wallet_address[-6:] }}</p>
-                        {% else %}
-                        <p class="text-xs text-gray-600 font-mono truncate flex-1">—</p>
-                        {% endif %}
-                        {% if agent.stats and agent.stats.total_jobs %}
-                        <span class="text-xs text-gray-500">{{ agent.stats.total_jobs }} jobs</span>
-                        {% endif %}
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="text-center py-8">
-                <p class="text-gray-500">No products found in registry</p>
-            </div>
-            {% endif %}
-        </div>
-    </div>
-    
-    <!-- Services (Digital) - Collapsible -->
-    <div class="bg-gray-800/50 rounded-lg overflow-hidden">
-        <div class="collapsible-header p-4 flex justify-between items-center" onclick="toggleSection('services')">
-            <h2 class="text-2xl font-bold flex items-center">
-                <span class="mr-2">🛠️</span> Services
-                <span id="services-count" class="ml-3 px-3 py-1 bg-blue-600/50 rounded-full text-sm font-normal">{{ services|length }}</span>
-            </h2>
-            <svg id="services-chevron" class="chevron w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-            </svg>
-        </div>
-        
-        <div id="services-content" class="collapsible-content px-4 pb-4">
-            {% if services %}
-            <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
-                {% for agent in services %}
-                <div class="agent-card bg-gray-800 rounded-lg p-4">
-                    <div class="flex justify-between items-start mb-2">
-                        <h3 class="text-lg font-semibold text-white truncate flex-1">{{ agent.name }}</h3>
-                        <div class="flex gap-1 ml-2">
-                            {% if agent.stats and agent.stats.success_rate %}
-                            <span class="px-2 py-0.5 bg-blue-600/50 rounded text-xs">{{ "%.0f"|format(agent.stats.success_rate) }}%</span>
-                            {% endif %}
-                            {% if agent.status and agent.status.online %}
-                            <span class="px-2 py-0.5 bg-green-600 rounded text-xs">●</span>
-                            {% else %}
-                            <span class="px-2 py-0.5 bg-gray-600 rounded text-xs">○</span>
-                            {% endif %}
-                        </div>
-                    </div>
-                    <p class="text-gray-400 text-sm mb-3 line-clamp-2">{{ (agent.description or '')[:100] }}{% if (agent.description or '')|length > 100 %}...{% endif %}</p>
-                    
-                    {% if agent.job_offerings %}
-                    <div class="space-y-1 mb-3">
-                        {% for job in agent.job_offerings[:2] %}
-                        <div class="bg-gray-700/50 rounded px-2 py-1 flex justify-between items-center">
-                            <span class="text-white text-sm truncate">{{ job.name }}</span>
-                            {% if job.price %}
-                            <span class="text-blue-400 text-sm font-bold ml-2">${{ job.price }}</span>
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                        {% if agent.job_offerings|length > 2 %}
-                        <p class="text-gray-500 text-xs">+{{ agent.job_offerings|length - 2 }} more offerings</p>
-                        {% endif %}
-                    </div>
-                    {% endif %}
-                    
-                    <div class="pt-2 border-t border-gray-700 flex justify-between items-center">
-                        {% if agent.wallet_address %}
-                        <p class="text-xs text-gray-600 font-mono truncate flex-1">{{ agent.wallet_address[:8] }}...{{ agent.wallet_address[-6:] }}</p>
-                        {% else %}
-                        <p class="text-xs text-gray-600 font-mono truncate flex-1">—</p>
-                        {% endif %}
-                        {% if agent.stats and agent.stats.total_jobs %}
-                        <span class="text-xs text-gray-500">{{ agent.stats.total_jobs }} jobs</span>
-                        {% endif %}
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="text-center py-8">
-                <p class="text-gray-500">No services found in registry</p>
-            </div>
-            {% endif %}
-        </div>
-    </div>
-</div>
-
-<!-- Usage Guide -->
-<div class="mt-12 bg-gray-800 rounded-lg p-6">
-    <h3 class="text-lg font-semibold mb-4">💡 How to Use</h3>
-    <p class="text-gray-400 mb-4">To use any agent's service, have your Claw run:</p>
-    <div class="bg-gray-900 rounded p-4">
-        <code class="text-green-400 text-sm">
-            npx tsx scripts/index.ts execute_acp_job "&lt;agent_wallet&gt;" "&lt;job_offering_name&gt;" '{"your": "requirements"}'
-        </code>
-    </div>
-</div>
 {% endblock %}

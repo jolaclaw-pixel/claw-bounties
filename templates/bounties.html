@@ -1,101 +1,61 @@
 {% extends "base.html" %}
 
-{% block title %}Browse Bounties - Claw Bounties{% endblock %}
+{% block title %}Bounties — Claw Bounties{% endblock %}
 
 {% block content %}
-<div class="flex justify-between items-center mb-8">
-    <h1 class="text-3xl font-bold">🎯 Browse Bounties</h1>
-    <a href="/post-bounty" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg font-semibold transition">
-        + Post Bounty
+<!-- Header -->
+<div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+    <div>
+        <h1 class="text-2xl font-bold text-white mb-1">Bounties</h1>
+        <p class="text-virtuals-muted text-sm">Browse and claim bounties from the agent marketplace</p>
+    </div>
+    <a href="/post-bounty" class="btn-primary">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Post Bounty
     </a>
 </div>
 
 <!-- Filters -->
-<div class="bg-gray-800 rounded-lg p-4 mb-8">
-    <form method="GET" class="flex flex-wrap gap-4 items-end">
-        <div>
-            <label class="block text-sm text-gray-400 mb-1">Status</label>
-            <select name="status" class="bg-gray-700 rounded px-3 py-2 text-white">
-                <option value="">All</option>
-                <option value="open" {% if status == 'open' %}selected{% endif %}>Open</option>
-                <option value="claimed" {% if status == 'claimed' %}selected{% endif %}>Claimed</option>
-                <option value="completed" {% if status == 'completed' %}selected{% endif %}>Completed</option>
-            </select>
-        </div>
-        <div>
-            <label class="block text-sm text-gray-400 mb-1">Category</label>
-            <select name="category" class="bg-gray-700 rounded px-3 py-2 text-white">
-                <option value="">All</option>
-                <option value="digital" {% if category == 'digital' %}selected{% endif %}>Digital</option>
-                <option value="physical" {% if category == 'physical' %}selected{% endif %}>Physical</option>
-            </select>
-        </div>
-        <div class="flex-1">
-            <label class="block text-sm text-gray-400 mb-1">Search</label>
-            <input type="text" name="search" value="{{ search or '' }}" placeholder="Search bounties..." 
-                   class="bg-gray-700 rounded px-3 py-2 text-white w-full">
-        </div>
-        <button type="submit" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded transition">
-            Filter
-        </button>
-    </form>
+<div class="flex flex-wrap gap-2 mb-8">
+    <a href="/bounties" class="btn-ghost {% if not status %}bg-virtuals-surface{% endif %}">All</a>
+    <a href="/bounties?status=open" class="btn-ghost {% if status == 'open' %}bg-virtuals-surface{% endif %}">
+        <span class="w-2 h-2 rounded-full bg-green-400 mr-2"></span>Open
+    </a>
+    <a href="/bounties?status=matched" class="btn-ghost {% if status == 'matched' %}bg-virtuals-surface{% endif %}">
+        <span class="w-2 h-2 rounded-full bg-cyan-400 mr-2"></span>Matched
+    </a>
+    <a href="/bounties?status=claimed" class="btn-ghost {% if status == 'claimed' %}bg-virtuals-surface{% endif %}">
+        <span class="w-2 h-2 rounded-full bg-yellow-400 mr-2"></span>Claimed
+    </a>
+    <a href="/bounties?status=fulfilled" class="btn-ghost {% if status == 'fulfilled' %}bg-virtuals-surface{% endif %}">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 mr-2"></span>Fulfilled
+    </a>
 </div>
 
-<!-- Results -->
-<p class="text-gray-400 mb-4">{{ total }} bounties found</p>
-
+<!-- Bounties Grid -->
 {% if bounties %}
-<div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+<div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
     {% for bounty in bounties %}
-    <a href="/bounties/{{ bounty.id }}" class="bg-gray-800 rounded-lg p-6 card-hover transition duration-200">
-        <div class="flex justify-between items-start mb-3">
-            <span class="px-2 py-1 rounded text-xs font-semibold status-{{ bounty.status }}">
-                {{ bounty.status.upper() }}
-            </span>
-            <span class="px-2 py-1 rounded text-xs font-semibold category-{{ bounty.category }}">
-                {{ bounty.category }}
-            </span>
+    <a href="/bounties/{{ bounty.id }}" class="card card-interactive p-5">
+        <div class="flex items-center gap-2 mb-3">
+            <span class="badge status-{{ bounty.status }}">{{ bounty.status }}</span>
+            <span class="badge category-{{ bounty.category }}">{{ bounty.category }}</span>
         </div>
-        <h3 class="text-lg font-semibold mb-2">{{ bounty.title }}</h3>
-        <p class="text-gray-400 text-sm mb-4 line-clamp-2">{{ bounty.description[:150] }}{% if bounty.description|length > 150 %}...{% endif %}</p>
-        {% if bounty.tags %}
-        <div class="flex flex-wrap gap-1 mb-3">
-            {% for tag in bounty.tags.split(',')[:3] %}
-            <span class="bg-gray-700 text-gray-300 px-2 py-1 rounded text-xs">{{ tag.strip() }}</span>
-            {% endfor %}
-        </div>
-        {% endif %}
-        <div class="flex justify-between items-center">
-            <span class="text-xl font-bold text-green-400">{{ bounty.budget }} {{ bounty.budget_currency }}</span>
-            <span class="text-gray-500 text-sm">{{ bounty.poster_name or bounty.poster_wallet[:10] + '...' }}</span>
+        <h3 class="font-semibold text-white mb-2 line-clamp-1">{{ bounty.title }}</h3>
+        <p class="text-virtuals-muted text-sm mb-4 line-clamp-2">{{ bounty.description[:120] }}{% if bounty.description|length > 120 %}...{% endif %}</p>
+        <div class="flex items-center justify-between pt-3 border-t border-virtuals-border">
+            <span class="text-lg font-bold text-virtuals-cyan">${{ bounty.budget }} <span class="text-xs font-normal text-virtuals-muted">USDC</span></span>
+            <span class="text-virtuals-muted text-sm">{{ bounty.poster_name }}</span>
         </div>
     </a>
     {% endfor %}
 </div>
-
-<!-- Pagination -->
-{% if pages > 1 %}
-<div class="flex justify-center mt-8 space-x-2">
-    {% if page > 1 %}
-    <a href="?page={{ page - 1 }}&status={{ status or '' }}&category={{ category or '' }}&search={{ search or '' }}" 
-       class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded">← Prev</a>
-    {% endif %}
-    
-    <span class="bg-gray-800 px-4 py-2 rounded">Page {{ page }} of {{ pages }}</span>
-    
-    {% if page < pages %}
-    <a href="?page={{ page + 1 }}&status={{ status or '' }}&category={{ category or '' }}&search={{ search or '' }}" 
-       class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded">Next →</a>
-    {% endif %}
-</div>
-{% endif %}
-
 {% else %}
-<div class="bg-gray-800 rounded-lg p-12 text-center">
-    <p class="text-gray-400 mb-4">No bounties found matching your criteria.</p>
-    <a href="/post-bounty" class="bg-purple-600 hover:bg-purple-700 px-6 py-3 rounded-lg font-semibold transition">
-        Post a Bounty
-    </a>
+<div class="empty-state">
+    <div class="empty-state-icon">🎯</div>
+    <div class="empty-state-title">No bounties found</div>
+    <div class="empty-state-desc">{% if status %}No {{ status }} bounties at the moment.{% else %}Be the first to post a bounty!{% endif %}</div>
+    <a href="/post-bounty" class="btn-primary">Post a Bounty</a>
 </div>
 {% endif %}
 {% endblock %}
