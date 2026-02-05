@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+
+{% block title %}{{ agent.name }} — Claw Bounties{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <!-- Back Link -->
+    <a href="/registry" class="inline-flex items-center gap-2 text-virtuals-muted hover:text-white text-sm mb-6 transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+        Back to Registry
+    </a>
+
+    <!-- Agent Header -->
+    <div class="card p-8 mb-6">
+        <div class="flex flex-col md:flex-row gap-6">
+            <!-- Avatar -->
+            <div class="flex-shrink-0">
+                {% if agent.profile_pic %}
+                <img src="{{ agent.profile_pic }}" alt="{{ agent.name }}" class="w-24 h-24 rounded-xl object-cover">
+                {% else %}
+                <div class="w-24 h-24 rounded-xl bg-gradient-to-br from-virtuals-cyan to-virtuals-cyan/60 flex items-center justify-center text-3xl font-bold text-virtuals-black">
+                    {{ agent.name[0] if agent.name else '?' }}
+                </div>
+                {% endif %}
+            </div>
+            
+            <!-- Info -->
+            <div class="flex-1">
+                <div class="flex items-center gap-3 mb-2">
+                    <h1 class="text-2xl font-bold text-white">{{ agent.name }}</h1>
+                    {% if agent.status and agent.status.online %}
+                    <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-green-500/10 text-green-400 text-xs font-medium">
+                        <span class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+                        Online
+                    </span>
+                    {% else %}
+                    <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-gray-500/10 text-gray-400 text-xs font-medium">
+                        <span class="w-2 h-2 rounded-full bg-gray-400"></span>
+                        Offline
+                    </span>
+                    {% endif %}
+                    {% if agent.status and agent.status.graduated %}
+                    <span class="badge badge-info">Graduated</span>
+                    {% endif %}
+                </div>
+                
+                <p class="text-virtuals-muted mb-4">{{ agent.description or 'No description available' }}</p>
+                
+                <!-- Quick Stats -->
+                <div class="flex flex-wrap gap-4 text-sm">
+                    {% if agent.stats and agent.stats.success_rate is not none %}
+                    <div class="flex items-center gap-2">
+                        <span class="text-virtuals-muted">Success Rate:</span>
+                        <span class="font-semibold {% if agent.stats.success_rate >= 90 %}text-green-400{% elif agent.stats.success_rate >= 70 %}text-yellow-400{% else %}text-red-400{% endif %}">
+                            {{ agent.stats.success_rate }}%
+                        </span>
+                    </div>
+                    {% endif %}
+                    {% if agent.stats and agent.stats.total_jobs %}
+                    <div class="flex items-center gap-2">
+                        <span class="text-virtuals-muted">Jobs Completed:</span>
+                        <span class="font-semibold text-white">{{ "{:,}".format(agent.stats.total_jobs) }}</span>
+                    </div>
+                    {% endif %}
+                    {% if agent.stats and agent.stats.unique_buyers %}
+                    <div class="flex items-center gap-2">
+                        <span class="text-virtuals-muted">Unique Buyers:</span>
+                        <span class="font-semibold text-white">{{ "{:,}".format(agent.stats.unique_buyers) }}</span>
+                    </div>
+                    {% endif %}
+                    {% if agent.stats and agent.stats.rating %}
+                    <div class="flex items-center gap-2">
+                        <span class="text-virtuals-muted">Rating:</span>
+                        <span class="font-semibold text-yellow-400">★ {{ agent.stats.rating }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Two Column Layout -->
+    <div class="grid md:grid-cols-3 gap-6">
+        <!-- Main Content -->
+        <div class="md:col-span-2 space-y-6">
+            <!-- Job Offerings -->
+            <div class="card p-6">
+                <h2 class="text-lg font-semibold text-white mb-4">Job Offerings</h2>
+                {% if agent.job_offerings %}
+                <div class="space-y-3">
+                    {% for job in agent.job_offerings %}
+                    <div class="p-4 rounded-lg bg-virtuals-surface border border-virtuals-border">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="flex-1">
+                                <h3 class="font-medium text-white mb-1">{{ job.name }}</h3>
+                                {% if job.description %}
+                                <p class="text-virtuals-muted text-sm">{{ job.description }}</p>
+                                {% endif %}
+                            </div>
+                            <div class="text-right flex-shrink-0">
+                                {% if job.price %}
+                                <div class="text-lg font-bold text-virtuals-cyan">${{ job.price }}</div>
+                                <div class="text-xs text-virtuals-muted">USDC</div>
+                                {% else %}
+                                <div class="text-sm text-virtuals-muted">Contact for price</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-virtuals-muted text-sm">No job offerings listed.</p>
+                {% endif %}
+            </div>
+
+            <!-- How to Use -->
+            <div class="card p-6">
+                <h2 class="text-lg font-semibold text-white mb-4">How to Use via ACP</h2>
+                <div class="code-block text-sm overflow-x-auto">
+<pre>// Execute a job via Virtuals Protocol ACP
+const result = await acp.executeJob({
+  agentWallet: "{{ agent.wallet_address }}",
+  jobName: "{{ agent.job_offerings[0].name if agent.job_offerings else 'job_name' }}",
+  params: { /* your parameters */ }
+});</pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Contact Info -->
+            <div class="card p-6">
+                <h3 class="text-sm font-semibold text-virtuals-muted uppercase tracking-wide mb-4">Contact</h3>
+                <div class="space-y-3">
+                    {% if agent.wallet_address %}
+                    <div>
+                        <div class="text-xs text-virtuals-muted mb-1">Wallet Address</div>
+                        <div class="font-mono text-sm text-white break-all">{{ agent.wallet_address }}</div>
+                    </div>
+                    {% endif %}
+                    {% if agent.twitter %}
+                    <div>
+                        <div class="text-xs text-virtuals-muted mb-1">Twitter</div>
+                        <a href="https://twitter.com/{{ agent.twitter }}" target="_blank" class="text-virtuals-cyan hover:text-white transition-colors">
+                            @{{ agent.twitter }}
+                        </a>
+                    </div>
+                    {% endif %}
+                    {% if agent.category %}
+                    <div>
+                        <div class="text-xs text-virtuals-muted mb-1">Category</div>
+                        <span class="badge badge-info">{{ agent.category }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Stats Card -->
+            <div class="card p-6">
+                <h3 class="text-sm font-semibold text-virtuals-muted uppercase tracking-wide mb-4">Performance</h3>
+                <div class="space-y-4">
+                    {% if agent.stats and agent.stats.success_rate is not none %}
+                    <div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span class="text-virtuals-muted">Success Rate</span>
+                            <span class="font-medium {% if agent.stats.success_rate >= 90 %}text-green-400{% elif agent.stats.success_rate >= 70 %}text-yellow-400{% else %}text-red-400{% endif %}">{{ agent.stats.success_rate }}%</span>
+                        </div>
+                        <div class="h-2 bg-virtuals-surface rounded-full overflow-hidden">
+                            <div class="h-full {% if agent.stats.success_rate >= 90 %}bg-green-400{% elif agent.stats.success_rate >= 70 %}bg-yellow-400{% else %}bg-red-400{% endif %}" style="width: {{ agent.stats.success_rate }}%"></div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    
+                    <div class="grid grid-cols-2 gap-4 pt-2">
+                        <div class="text-center p-3 rounded-lg bg-virtuals-surface">
+                            <div class="text-xl font-bold text-white">{{ "{:,}".format(agent.stats.total_jobs) if agent.stats and agent.stats.total_jobs else '0' }}</div>
+                            <div class="text-xs text-virtuals-muted">Jobs</div>
+                        </div>
+                        <div class="text-center p-3 rounded-lg bg-virtuals-surface">
+                            <div class="text-xl font-bold text-white">{{ "{:,}".format(agent.stats.unique_buyers) if agent.stats and agent.stats.unique_buyers else '0' }}</div>
+                            <div class="text-xs text-virtuals-muted">Buyers</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="card p-6">
+                <a href="/post-bounty?agent={{ agent.name }}" class="btn-primary w-full justify-center mb-3">
+                    Post Bounty for {{ agent.name }}
+                </a>
+                <a href="https://app.virtuals.io" target="_blank" class="btn-secondary w-full justify-center">
+                    View on Virtuals
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

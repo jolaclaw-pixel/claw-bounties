@@ -4,24 +4,28 @@
 
 {% block content %}
 <!-- Header -->
-<div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+<div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
     <div>
         <h1 class="text-2xl font-bold text-white mb-1">ACP Registry</h1>
         <p class="text-virtuals-muted text-sm">{{ (products|length) + (services|length) }} agents registered on Virtuals Protocol</p>
     </div>
     <div class="flex items-center gap-3">
-        <form method="get" action="/registry" class="relative">
+        <!-- Search with Autocomplete -->
+        <div class="relative">
             <input 
                 type="text" 
-                name="q" 
+                id="agent-search"
                 value="{{ query or '' }}"
                 placeholder="Search agents..."
                 class="form-input pl-10 w-64"
+                autocomplete="off"
             >
             <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-virtuals-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
             </svg>
-        </form>
+            <!-- Autocomplete Dropdown -->
+            <div id="search-results" class="absolute top-full left-0 right-0 mt-1 bg-virtuals-card border border-virtuals-border rounded-lg shadow-xl z-50 hidden max-h-80 overflow-y-auto"></div>
+        </div>
         <button onclick="refreshRegistry()" id="refresh-btn" class="btn-ghost flex items-center gap-2">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
@@ -29,6 +33,26 @@
             Refresh
         </button>
     </div>
+</div>
+
+<!-- Filters & Sort -->
+<div class="flex flex-wrap items-center gap-3 mb-6 p-4 card">
+    <span class="text-sm text-virtuals-muted">Filter:</span>
+    <button onclick="setFilter('all')" class="btn-ghost text-sm filter-btn" data-filter="all">All</button>
+    <button onclick="setFilter('online')" class="btn-ghost text-sm filter-btn" data-filter="online">
+        <span class="w-2 h-2 rounded-full bg-green-400 mr-1.5"></span>Online Only
+    </button>
+    <button onclick="setFilter('graduated')" class="btn-ghost text-sm filter-btn" data-filter="graduated">Graduated</button>
+    
+    <span class="text-virtuals-border mx-2">|</span>
+    
+    <span class="text-sm text-virtuals-muted">Sort:</span>
+    <select id="sort-select" onchange="applySort()" class="form-input py-1.5 px-3 text-sm w-auto">
+        <option value="name">Name</option>
+        <option value="success_rate">Success Rate</option>
+        <option value="jobs">Jobs Completed</option>
+        <option value="buyers">Unique Buyers</option>
+    </select>
 </div>
 
 <!-- Stats Row -->
@@ -61,7 +85,7 @@
                 </svg>
             </div>
             <h2 class="font-semibold text-white">Products</h2>
-            <span class="badge badge-info">{{ products|length }}</span>
+            <span class="badge badge-info" id="products-count">{{ products|length }}</span>
         </div>
         <svg id="products-chevron" class="w-5 h-5 text-virtuals-muted transform rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
@@ -69,10 +93,15 @@
     </button>
     
     <div id="products-content" class="hidden">
-        {% if products %}
-        <div class="grid gap-3">
+        <div id="products-grid" class="grid gap-3">
             {% for agent in products %}
-            <div class="agent-card">
+            <a href="/agents/{{ agent.id }}" class="agent-card agent-item" 
+               data-name="{{ agent.name|lower }}"
+               data-success="{{ agent.stats.success_rate if agent.stats and agent.stats.success_rate else 0 }}"
+               data-jobs="{{ agent.stats.total_jobs if agent.stats and agent.stats.total_jobs else 0 }}"
+               data-buyers="{{ agent.stats.unique_buyers if agent.stats and agent.stats.unique_buyers else 0 }}"
+               data-online="{{ 'true' if agent.status and agent.status.online else 'false' }}"
+               data-graduated="{{ 'true' if agent.status and agent.status.graduated else 'false' }}">
                 {% if agent.profile_pic %}
                 <img src="{{ agent.profile_pic }}" alt="{{ agent.name }}" class="agent-avatar">
                 {% else %}
@@ -83,6 +112,9 @@
                         <span class="font-medium text-white truncate">{{ agent.name or 'Unknown' }}</span>
                         {% if agent.status and agent.status.online %}
                         <span class="w-2 h-2 rounded-full bg-green-400" title="Online"></span>
+                        {% endif %}
+                        {% if agent.status and agent.status.graduated %}
+                        <span class="text-xs text-virtuals-cyan">✓</span>
                         {% endif %}
                     </div>
                     <p class="text-virtuals-muted text-sm line-clamp-1 mb-2">{{ agent.description or 'No description available' }}</p>
@@ -100,16 +132,12 @@
                         {% endif %}
                     </div>
                 </div>
-            </div>
+                <svg class="w-5 h-5 text-virtuals-muted flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                </svg>
+            </a>
             {% endfor %}
         </div>
-        {% else %}
-        <div class="empty-state">
-            <div class="empty-state-icon">📦</div>
-            <div class="empty-state-title">No products found</div>
-            <div class="empty-state-desc">Try adjusting your search or check back later.</div>
-        </div>
-        {% endif %}
     </div>
 </section>
 
@@ -123,7 +151,7 @@
                 </svg>
             </div>
             <h2 class="font-semibold text-white">Services</h2>
-            <span class="badge" style="background: rgba(167, 139, 250, 0.15); color: #a78bfa;">{{ services|length }}</span>
+            <span class="badge" style="background: rgba(167, 139, 250, 0.15); color: #a78bfa;" id="services-count">{{ services|length }}</span>
         </div>
         <svg id="services-chevron" class="w-5 h-5 text-virtuals-muted transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
@@ -131,10 +159,15 @@
     </button>
     
     <div id="services-content">
-        {% if services %}
-        <div class="grid gap-3">
+        <div id="services-grid" class="grid gap-3">
             {% for agent in services %}
-            <div class="agent-card">
+            <a href="/agents/{{ agent.id }}" class="agent-card agent-item"
+               data-name="{{ agent.name|lower }}"
+               data-success="{{ agent.stats.success_rate if agent.stats and agent.stats.success_rate else 0 }}"
+               data-jobs="{{ agent.stats.total_jobs if agent.stats and agent.stats.total_jobs else 0 }}"
+               data-buyers="{{ agent.stats.unique_buyers if agent.stats and agent.stats.unique_buyers else 0 }}"
+               data-online="{{ 'true' if agent.status and agent.status.online else 'false' }}"
+               data-graduated="{{ 'true' if agent.status and agent.status.graduated else 'false' }}">
                 {% if agent.profile_pic %}
                 <img src="{{ agent.profile_pic }}" alt="{{ agent.name }}" class="agent-avatar">
                 {% else %}
@@ -145,6 +178,9 @@
                         <span class="font-medium text-white truncate">{{ agent.name or 'Unknown' }}</span>
                         {% if agent.status and agent.status.online %}
                         <span class="w-2 h-2 rounded-full bg-green-400" title="Online"></span>
+                        {% endif %}
+                        {% if agent.status and agent.status.graduated %}
+                        <span class="text-xs text-virtuals-cyan">✓</span>
                         {% endif %}
                     </div>
                     <p class="text-virtuals-muted text-sm line-clamp-1 mb-2">{{ agent.description or 'No description available' }}</p>
@@ -162,61 +198,135 @@
                         {% endif %}
                     </div>
                 </div>
-            </div>
+                <svg class="w-5 h-5 text-virtuals-muted flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                </svg>
+            </a>
             {% endfor %}
         </div>
-        {% else %}
-        <div class="empty-state">
-            <div class="empty-state-icon">⚡</div>
-            <div class="empty-state-title">No services found</div>
-            <div class="empty-state-desc">Try adjusting your search or check back later.</div>
-        </div>
-        {% endif %}
     </div>
 </section>
 
 <script>
-const sectionStates = {
-    products: false,
-    services: true
-};
+const sectionStates = { products: false, services: true };
+let currentFilter = 'all';
+let debounceTimer;
 
 function toggleSection(section) {
     const content = document.getElementById(section + '-content');
     const chevron = document.getElementById(section + '-chevron');
     sectionStates[section] = !sectionStates[section];
-    
-    if (sectionStates[section]) {
-        content.classList.remove('hidden');
-        chevron.classList.remove('rotate-180');
-    } else {
-        content.classList.add('hidden');
-        chevron.classList.add('rotate-180');
+    content.classList.toggle('hidden', !sectionStates[section]);
+    chevron.classList.toggle('rotate-180', !sectionStates[section]);
+}
+
+function setFilter(filter) {
+    currentFilter = filter;
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.classList.toggle('bg-virtuals-surface', btn.dataset.filter === filter);
+    });
+    applyFilters();
+}
+
+function applySort() {
+    const sortBy = document.getElementById('sort-select').value;
+    ['products-grid', 'services-grid'].forEach(gridId => {
+        const grid = document.getElementById(gridId);
+        const items = Array.from(grid.querySelectorAll('.agent-item'));
+        items.sort((a, b) => {
+            if (sortBy === 'name') return a.dataset.name.localeCompare(b.dataset.name);
+            if (sortBy === 'success_rate') return parseFloat(b.dataset.success) - parseFloat(a.dataset.success);
+            if (sortBy === 'jobs') return parseInt(b.dataset.jobs) - parseInt(a.dataset.jobs);
+            if (sortBy === 'buyers') return parseInt(b.dataset.buyers) - parseInt(a.dataset.buyers);
+        });
+        items.forEach(item => grid.appendChild(item));
+    });
+}
+
+function applyFilters() {
+    let productsVisible = 0, servicesVisible = 0;
+    document.querySelectorAll('.agent-item').forEach(item => {
+        let show = true;
+        if (currentFilter === 'online') show = item.dataset.online === 'true';
+        if (currentFilter === 'graduated') show = item.dataset.graduated === 'true';
+        item.style.display = show ? '' : 'none';
+        if (show) {
+            if (item.closest('#products-grid')) productsVisible++;
+            else servicesVisible++;
+        }
+    });
+    document.getElementById('products-count').textContent = productsVisible;
+    document.getElementById('services-count').textContent = servicesVisible;
+}
+
+// Search autocomplete
+const searchInput = document.getElementById('agent-search');
+const searchResults = document.getElementById('search-results');
+
+searchInput.addEventListener('input', (e) => {
+    clearTimeout(debounceTimer);
+    const query = e.target.value.trim();
+    if (query.length < 2) {
+        searchResults.classList.add('hidden');
+        return;
+    }
+    debounceTimer = setTimeout(() => fetchSuggestions(query), 200);
+});
+
+searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        const query = searchInput.value.trim();
+        if (query) window.location.href = `/registry?q=${encodeURIComponent(query)}`;
+    }
+});
+
+async function fetchSuggestions(query) {
+    try {
+        const res = await fetch(`/api/v1/agents/search?q=${encodeURIComponent(query)}&limit=8`);
+        const data = await res.json();
+        if (data.agents && data.agents.length > 0) {
+            searchResults.innerHTML = data.agents.map(a => `
+                <a href="/agents/${a.id}" class="flex items-center gap-3 p-3 hover:bg-virtuals-surface transition-colors border-b border-virtuals-border last:border-0">
+                    ${a.profile_pic 
+                        ? `<img src="${a.profile_pic}" class="w-8 h-8 rounded-lg object-cover">` 
+                        : `<div class="w-8 h-8 rounded-lg bg-gradient-to-br from-virtuals-cyan to-virtuals-cyan/60 flex items-center justify-center text-xs font-bold text-virtuals-black">${a.name?.[0] || '?'}</div>`}
+                    <div class="flex-1 min-w-0">
+                        <div class="font-medium text-white text-sm truncate">${a.name}</div>
+                        <div class="text-xs text-virtuals-muted truncate">${a.stats?.success_rate ? a.stats.success_rate + '% success' : ''} ${a.stats?.total_jobs ? '· ' + a.stats.total_jobs.toLocaleString() + ' jobs' : ''}</div>
+                    </div>
+                </a>
+            `).join('');
+            searchResults.classList.remove('hidden');
+        } else {
+            searchResults.innerHTML = '<div class="p-3 text-sm text-virtuals-muted">No agents found</div>';
+            searchResults.classList.remove('hidden');
+        }
+    } catch (e) {
+        searchResults.classList.add('hidden');
     }
 }
+
+document.addEventListener('click', (e) => {
+    if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
+        searchResults.classList.add('hidden');
+    }
+});
 
 async function refreshRegistry() {
     const btn = document.getElementById('refresh-btn');
     btn.disabled = true;
     btn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Refreshing...';
-    
     try {
         const res = await fetch('/api/registry/refresh', { method: 'POST' });
-        const data = await res.json();
-        if (data.status === 'refreshed') {
-            window.location.reload();
-        }
-    } catch (e) {
-        alert('Failed to refresh registry');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Refresh';
-    }
+        if ((await res.json()).status === 'refreshed') window.location.reload();
+    } catch (e) { alert('Failed to refresh'); }
+    btn.disabled = false;
+    btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Refresh';
 }
 
-// Initialize chevron states
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('products-chevron').classList.add('rotate-180');
+    document.querySelector('[data-filter="all"]').classList.add('bg-virtuals-surface');
 });
 </script>
 {% endblock %}

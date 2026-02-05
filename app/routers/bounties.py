@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import Optional
@@ -6,6 +6,8 @@ from datetime import datetime
 import subprocess
 import json
 import os
+import httpx
+import logging
 
 from app.database import get_db
 from app.models import Bounty, BountyStatus, Service
@@ -16,6 +18,26 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/api/bounties", tags=["bounties"])
+logger = logging.getLogger(__name__)
+
+
+async def send_bounty_webhook(callback_url: str, event: str, bounty_data: dict):
+    """Send webhook notification for bounty events."""
+    if not callback_url:
+        return
+    
+    payload = {
+        "event": event,
+        "bounty": bounty_data,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(callback_url, json=payload)
+            logger.info(f"Webhook sent ({event}) to {callback_url}: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Webhook failed for {callback_url}: {e}")
 
 # Path to ACP skill for registry scanning
 ACP_SKILL_PATH = os.getenv("ACP_SKILL_PATH", "/Users/ethermage/.openclaw/virtuals-protocol-acp")
@@ -153,8 +175,58 @@ def get_bounty(bounty_id: int, db: Session = Depends(get_db)):
     return bounty
 
 
+@router.post("/{bounty_id}/claim")
+async def claim_bounty(
+    bounty_id: int, 
+    background_tasks: BackgroundTasks,
+    claimer_name: str = Form(...),
+    claimer_callback_url: str = Form(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Claim a bounty as an agent willing to fulfill it.
+    Notifies the poster via webhook if callback URL was provided.
+    """
+    bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
+    if not bounty:
+        raise HTTPException(status_code=404, detail="Bounty not found")
+    if bounty.status != BountyStatus.OPEN:
+        raise HTTPException(status_code=400, detail="Bounty is not available for claiming")
+    
+    bounty.status = BountyStatus.CLAIMED
+    bounty.claimed_by = claimer_name
+    bounty.claimer_callback_url = claimer_callback_url
+    bounty.claimed_at = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(bounty)
+    
+    # Send webhook notification to poster
+    if bounty.poster_callback_url:
+        bounty_data = {
+            "id": bounty.id,
+            "title": bounty.title,
+            "budget_usdc": bounty.budget,
+            "claimed_by": claimer_name,
+            "status": "CLAIMED"
+        }
+        background_tasks.add_task(send_bounty_webhook, bounty.poster_callback_url, "bounty.claimed", bounty_data)
+    
+    return {
+        "status": "claimed",
+        "bounty_id": bounty.id,
+        "claimed_by": claimer_name,
+        "message": f"Bounty claimed! Poster {'will be' if bounty.poster_callback_url else 'was NOT'} notified."
+    }
+
+
 @router.post("/{bounty_id}/match", response_model=BountyResponse)
-def match_bounty(bounty_id: int, match: BountyMatch, db: Session = Depends(get_db)):
+async def match_bounty(
+    bounty_id: int, 
+    match: BountyMatch, 
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
     """
     Match a bounty to an ACP service.
     Called when someone builds/lists a service that can fulfill the bounty.
@@ -162,8 +234,8 @@ def match_bounty(bounty_id: int, match: BountyMatch, db: Session = Depends(get_d
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
     if not bounty:
         raise HTTPException(status_code=404, detail="Bounty not found")
-    if bounty.status != BountyStatus.OPEN:
-        raise HTTPException(status_code=400, detail="Bounty is not open for matching")
+    if bounty.status not in [BountyStatus.OPEN, BountyStatus.CLAIMED]:
+        raise HTTPException(status_code=400, detail="Bounty is not available for matching")
     
     bounty.status = BountyStatus.MATCHED
     bounty.matched_service_id = match.service_id
@@ -174,14 +246,28 @@ def match_bounty(bounty_id: int, match: BountyMatch, db: Session = Depends(get_d
     db.commit()
     db.refresh(bounty)
     
-    # TODO: Send notification to poster's Claw via callback_url
-    # This would trigger the Claw to call ACP
+    # Send webhook notification to poster
+    if bounty.poster_callback_url:
+        bounty_data = {
+            "id": bounty.id,
+            "title": bounty.title,
+            "budget_usdc": bounty.budget,
+            "matched_acp_agent": bounty.matched_acp_agent,
+            "matched_acp_job": bounty.matched_acp_job,
+            "status": "MATCHED"
+        }
+        background_tasks.add_task(send_bounty_webhook, bounty.poster_callback_url, "bounty.matched", bounty_data)
     
     return bounty
 
 
 @router.post("/{bounty_id}/fulfill", response_model=BountyResponse)
-def fulfill_bounty(bounty_id: int, fulfill: BountyFulfill, db: Session = Depends(get_db)):
+async def fulfill_bounty(
+    bounty_id: int, 
+    fulfill: BountyFulfill, 
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
     """
     Mark bounty as fulfilled after ACP job completion.
     Called by the poster's Claw after successfully using the ACP service.
@@ -189,8 +275,8 @@ def fulfill_bounty(bounty_id: int, fulfill: BountyFulfill, db: Session = Depends
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
     if not bounty:
         raise HTTPException(status_code=404, detail="Bounty not found")
-    if bounty.status != BountyStatus.MATCHED:
-        raise HTTPException(status_code=400, detail="Bounty must be matched before fulfilling")
+    if bounty.status not in [BountyStatus.MATCHED, BountyStatus.CLAIMED]:
+        raise HTTPException(status_code=400, detail="Bounty must be claimed or matched before fulfilling")
     
     bounty.status = BountyStatus.FULFILLED
     bounty.acp_job_id = fulfill.acp_job_id
@@ -198,6 +284,21 @@ def fulfill_bounty(bounty_id: int, fulfill: BountyFulfill, db: Session = Depends
     
     db.commit()
     db.refresh(bounty)
+    
+    # Send webhook notifications to both poster and claimer
+    bounty_data = {
+        "id": bounty.id,
+        "title": bounty.title,
+        "budget_usdc": bounty.budget,
+        "status": "FULFILLED",
+        "acp_job_id": bounty.acp_job_id
+    }
+    
+    if bounty.poster_callback_url:
+        background_tasks.add_task(send_bounty_webhook, bounty.poster_callback_url, "bounty.fulfilled", bounty_data)
+    if bounty.claimer_callback_url:
+        background_tasks.add_task(send_bounty_webhook, bounty.claimer_callback_url, "bounty.fulfilled", bounty_data)
+    
     return bounty
 
 

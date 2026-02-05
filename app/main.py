@@ -1,5 +1,8 @@
 import os
-from fastapi import FastAPI, Request, Depends, Form, Query
+import httpx
+import asyncio
+import logging
+from fastapi import FastAPI, Request, Depends, Form, Query, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse
@@ -7,6 +10,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import Optional
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 from app.database import init_db, get_db
 from app.models import Bounty, Service, BountyStatus
@@ -125,6 +130,99 @@ async def bounty_detail(request: Request, bounty_id: int, db: Session = Depends(
         "bounty": bounty,
         "matching_services": list(set(matching_services))[:6]
     })
+
+
+@app.post("/bounties/{bounty_id}/claim")
+async def web_claim_bounty(
+    request: Request,
+    bounty_id: int,
+    background_tasks: BackgroundTasks,
+    claimer_name: str = Form(...),
+    claimer_callback_url: str = Form(None),
+    db: Session = Depends(get_db)
+):
+    """Web form handler for claiming a bounty."""
+    from datetime import datetime
+    
+    bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
+    if not bounty:
+        return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
+    
+    if bounty.status != BountyStatus.OPEN:
+        return RedirectResponse(url=f"/bounties/{bounty_id}", status_code=303)
+    
+    bounty.status = BountyStatus.CLAIMED
+    bounty.claimed_by = claimer_name
+    bounty.claimer_callback_url = claimer_callback_url
+    bounty.claimed_at = datetime.utcnow()
+    
+    db.commit()
+    
+    # Send webhook notification to poster
+    if bounty.poster_callback_url:
+        async def send_notification():
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    await client.post(bounty.poster_callback_url, json={
+                        "event": "bounty.claimed",
+                        "bounty": {
+                            "id": bounty.id,
+                            "title": bounty.title,
+                            "budget_usdc": bounty.budget,
+                            "claimed_by": claimer_name,
+                            "status": "CLAIMED"
+                        }
+                    })
+            except Exception as e:
+                logger.error(f"Webhook failed: {e}")
+        background_tasks.add_task(send_notification)
+    
+    return RedirectResponse(url=f"/bounties/{bounty_id}", status_code=303)
+
+
+@app.post("/bounties/{bounty_id}/fulfill")
+async def web_fulfill_bounty(
+    request: Request,
+    bounty_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Web form handler for marking a bounty as fulfilled."""
+    from datetime import datetime
+    
+    bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
+    if not bounty:
+        return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
+    
+    if bounty.status not in [BountyStatus.CLAIMED, BountyStatus.MATCHED]:
+        return RedirectResponse(url=f"/bounties/{bounty_id}", status_code=303)
+    
+    bounty.status = BountyStatus.FULFILLED
+    bounty.fulfilled_at = datetime.utcnow()
+    
+    db.commit()
+    
+    # Send webhook notifications
+    bounty_data = {
+        "id": bounty.id,
+        "title": bounty.title,
+        "budget_usdc": bounty.budget,
+        "status": "FULFILLED"
+    }
+    
+    async def send_notifications():
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                if bounty.poster_callback_url:
+                    await client.post(bounty.poster_callback_url, json={"event": "bounty.fulfilled", "bounty": bounty_data})
+                if bounty.claimer_callback_url:
+                    await client.post(bounty.claimer_callback_url, json={"event": "bounty.fulfilled", "bounty": bounty_data})
+        except Exception as e:
+            logger.error(f"Webhook failed: {e}")
+    
+    background_tasks.add_task(send_notifications)
+    
+    return RedirectResponse(url=f"/bounties/{bounty_id}", status_code=303)
 
 
 @app.get("/services")
@@ -313,6 +411,26 @@ async def registry_page(request: Request, q: Optional[str] = None):
     })
 
 
+@app.get("/agents/{agent_id}")
+async def agent_detail_page(request: Request, agent_id: int):
+    """Individual agent detail page."""
+    from app.acp_registry import get_cached_agents_async
+    
+    cache = await get_cached_agents_async()
+    agents = cache.get("agents", [])
+    
+    # Find agent by ID
+    agent = next((a for a in agents if a.get("id") == agent_id), None)
+    
+    if not agent:
+        return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
+    
+    return templates.TemplateResponse("agent_detail.html", {
+        "request": request,
+        "agent": agent
+    })
+
+
 @app.post("/api/registry/refresh")
 async def refresh_registry():
     """Manually refresh the ACP registry cache."""
@@ -324,6 +442,20 @@ async def refresh_registry():
         "agents_count": len(cache.get("agents", [])),
         "last_updated": cache.get("last_updated")
     }
+
+
+# ============ Webhook Notifications ============
+
+async def send_webhook_notification(url: str, payload: dict):
+    """Send a webhook notification to a callback URL."""
+    if not url:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, json=payload)
+            logger.info(f"Webhook sent to {url}: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Webhook failed for {url}: {e}")
 
 
 @app.get("/api/registry")

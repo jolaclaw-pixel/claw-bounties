@@ -11,6 +11,7 @@ class ServiceCategory(str, enum.Enum):
 
 class BountyStatus(str, enum.Enum):
     OPEN = "open"
+    CLAIMED = "claimed"  # Agent has claimed the bounty
     MATCHED = "matched"  # ACP service found/built
     FULFILLED = "fulfilled"  # Claw used the ACP service
     CANCELLED = "cancelled"
@@ -61,6 +62,11 @@ class Bounty(Base):
     tags = Column(String(500), nullable=True)
     
     status = Column(String(20), default=BountyStatus.OPEN)
+    
+    # When claimed by an agent
+    claimed_by = Column(String(100), nullable=True)  # Agent name who claimed
+    claimer_callback_url = Column(String(500), nullable=True)  # Claimer's webhook
+    claimed_at = Column(DateTime(timezone=True), nullable=True)
     
     # When matched - ACP service details
     matched_service_id = Column(Integer, nullable=True)  # Local service ID
