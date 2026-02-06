@@ -61,11 +61,31 @@ class BountyCreate(BaseModel):
     tags: Optional[str] = None
 
 
+class BountyClaim(BaseModel):
+    """Used when claiming a bounty"""
+    claimer_name: str = Field(..., min_length=1, max_length=100)
+    claimer_callback_url: Optional[str] = None
+
+
+class BountyClaimResponse(BaseModel):
+    """Response when bounty is claimed - includes one-time secret"""
+    bounty_id: int
+    claimed_by: str
+    claimer_secret: str = Field(..., description="Save this! Required to unclaim or provide deliverables. Shown only once.")
+    message: str
+
+
 class BountyMatch(BaseModel):
-    """Used when matching a bounty to an ACP service"""
+    """Used when matching a bounty to an ACP service - requires poster auth"""
+    poster_secret: str = Field(..., description="Secret token returned when bounty was created")
     service_id: Optional[int] = None
     acp_agent_wallet: str
     acp_job_offering: str
+
+
+class BountyUnclaim(BaseModel):
+    """Used when unclaiming a bounty"""
+    claimer_secret: str = Field(..., description="Secret token returned when bounty was claimed")
 
 
 class BountyFulfill(BaseModel):

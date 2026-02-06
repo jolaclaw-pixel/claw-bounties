@@ -13,7 +13,8 @@ from app.database import get_db
 from app.models import Bounty, BountyStatus, Service, generate_secret, verify_secret
 from app.schemas import (
     BountyCreate, BountyResponse, BountyList, 
-    BountyMatch, BountyFulfill, BountyCancel, BountyPostResponse,
+    BountyClaim, BountyClaimResponse, BountyMatch, BountyUnclaim,
+    BountyFulfill, BountyCancel, BountyPostResponse,
     ACPSearchResult, ACPAgent
 )
 
@@ -183,16 +184,17 @@ def get_bounty(bounty_id: int, db: Session = Depends(get_db)):
     return bounty
 
 
-@router.post("/{bounty_id}/claim")
+@router.post("/{bounty_id}/claim", response_model=BountyClaimResponse)
 async def claim_bounty(
     bounty_id: int, 
+    claim: BountyClaim,
     background_tasks: BackgroundTasks,
-    claimer_name: str = Form(...),
-    claimer_callback_url: str = Form(None),
     db: Session = Depends(get_db)
 ):
     """
     Claim a bounty as an agent willing to fulfill it.
+    
+    Returns a claimer_secret token - SAVE THIS! It's required to unclaim or manage your claim.
     Notifies the poster via webhook if callback URL was provided.
     """
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
@@ -201,9 +203,13 @@ async def claim_bounty(
     if bounty.status != BountyStatus.OPEN:
         raise HTTPException(status_code=400, detail="Bounty is not available for claiming")
     
+    # Generate auth secret for claimer
+    secret_token, secret_hash = generate_secret()
+    
     bounty.status = BountyStatus.CLAIMED
-    bounty.claimed_by = claimer_name
-    bounty.claimer_callback_url = claimer_callback_url
+    bounty.claimed_by = claim.claimer_name
+    bounty.claimer_callback_url = claim.claimer_callback_url
+    bounty.claimer_secret_hash = secret_hash
     bounty.claimed_at = datetime.utcnow()
     
     db.commit()
@@ -215,17 +221,63 @@ async def claim_bounty(
             "id": bounty.id,
             "title": bounty.title,
             "budget_usdc": bounty.budget,
-            "claimed_by": claimer_name,
+            "claimed_by": claim.claimer_name,
             "status": "CLAIMED"
         }
         background_tasks.add_task(send_bounty_webhook, bounty.poster_callback_url, "bounty.claimed", bounty_data)
     
-    return {
-        "status": "claimed",
-        "bounty_id": bounty.id,
-        "claimed_by": claimer_name,
-        "message": f"Bounty claimed! Poster {'will be' if bounty.poster_callback_url else 'was NOT'} notified."
-    }
+    return BountyClaimResponse(
+        bounty_id=bounty.id,
+        claimed_by=claim.claimer_name,
+        claimer_secret=secret_token,
+        message=f"Bounty claimed! SAVE YOUR claimer_secret - you need it to unclaim. Poster {'will be' if bounty.poster_callback_url else 'was NOT'} notified."
+    )
+
+
+@router.post("/{bounty_id}/unclaim", response_model=BountyResponse)
+async def unclaim_bounty(
+    bounty_id: int,
+    unclaim: BountyUnclaim,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Unclaim a bounty (release claim back to OPEN status).
+    
+    Requires claimer_secret for authentication.
+    """
+    bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
+    if not bounty:
+        raise HTTPException(status_code=404, detail="Bounty not found")
+    
+    # Verify claimer authentication
+    if not verify_secret(unclaim.claimer_secret, bounty.claimer_secret_hash):
+        raise HTTPException(status_code=403, detail="Invalid claimer_secret. Only the claimer can unclaim it.")
+    
+    if bounty.status != BountyStatus.CLAIMED:
+        raise HTTPException(status_code=400, detail="Bounty is not in CLAIMED status")
+    
+    # Reset to OPEN
+    bounty.status = BountyStatus.OPEN
+    bounty.claimed_by = None
+    bounty.claimer_callback_url = None
+    bounty.claimer_secret_hash = None
+    bounty.claimed_at = None
+    
+    db.commit()
+    db.refresh(bounty)
+    
+    # Notify poster
+    if bounty.poster_callback_url:
+        bounty_data = {
+            "id": bounty.id,
+            "title": bounty.title,
+            "budget_usdc": bounty.budget,
+            "status": "OPEN"
+        }
+        background_tasks.add_task(send_bounty_webhook, bounty.poster_callback_url, "bounty.unclaimed", bounty_data)
+    
+    return bounty
 
 
 @router.post("/{bounty_id}/match", response_model=BountyResponse)
@@ -237,11 +289,18 @@ async def match_bounty(
 ):
     """
     Match a bounty to an ACP service.
-    Called when someone builds/lists a service that can fulfill the bounty.
+    Called when poster approves a service to fulfill the bounty.
+    
+    Requires poster_secret for authentication.
     """
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
     if not bounty:
         raise HTTPException(status_code=404, detail="Bounty not found")
+    
+    # Verify poster authentication
+    if not verify_secret(match.poster_secret, bounty.poster_secret_hash):
+        raise HTTPException(status_code=403, detail="Invalid poster_secret. Only the bounty poster can match it to a service.")
+    
     if bounty.status not in [BountyStatus.OPEN, BountyStatus.CLAIMED]:
         raise HTTPException(status_code=400, detail="Bounty is not available for matching")
     

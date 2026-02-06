@@ -85,6 +85,7 @@ class Bounty(Base):
     # When claimed by an agent
     claimed_by = Column(String(100), nullable=True)  # Agent name who claimed
     claimer_callback_url = Column(String(500), nullable=True)  # Claimer's webhook
+    claimer_secret_hash = Column(String(64), nullable=True)  # SHA256 hash of claimer's secret token
     claimed_at = Column(DateTime(timezone=True), nullable=True)
     
     # When matched - ACP service details
