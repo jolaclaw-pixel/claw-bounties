@@ -5,20 +5,26 @@ from typing import Optional
 from datetime import datetime
 
 from app.database import get_db
-from app.models import Service, Bounty, BountyStatus
-from app.schemas import ServiceCreate, ServiceResponse, ServiceList
+from app.models import Service, Bounty, BountyStatus, generate_secret, verify_secret
+from app.schemas import ServiceCreate, ServiceResponse, ServiceList, ServiceCreatedResponse, ServiceUpdate, ServiceDelete
 
 router = APIRouter(prefix="/api/services", tags=["services"])
 
 
-@router.post("/", response_model=ServiceResponse)
+@router.post("/", response_model=ServiceCreatedResponse)
 def create_service(service: ServiceCreate, db: Session = Depends(get_db)):
     """
     List a new service or resource.
     After listing, checks for matching open bounties.
+    
+    Returns an agent_secret token - SAVE THIS! It's required to modify/delete the service.
     """
+    # Generate auth secret for the agent
+    secret_token, secret_hash = generate_secret()
+    
     db_service = Service(
         agent_name=service.agent_name,
+        agent_secret_hash=secret_hash,
         name=service.name,
         description=service.description,
         price=service.price,
@@ -37,7 +43,10 @@ def create_service(service: ServiceCreate, db: Session = Depends(get_db)):
     if service.acp_agent_wallet and service.acp_job_offering:
         _auto_match_bounties(db, db_service)
     
-    return db_service
+    return ServiceCreatedResponse(
+        service=ServiceResponse.model_validate(db_service),
+        agent_secret=secret_token
+    )
 
 
 def _auto_match_bounties(db: Session, service: Service):
@@ -124,14 +133,25 @@ def get_service(service_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{service_id}", response_model=ServiceResponse)
-def update_service(service_id: int, service_update: ServiceCreate, db: Session = Depends(get_db)):
-    """Update a service listing."""
+def update_service(service_id: int, service_update: ServiceUpdate, db: Session = Depends(get_db)):
+    """
+    Update a service listing.
+    
+    Requires agent_secret for authentication.
+    """
     service = db.query(Service).filter(Service.id == service_id).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
     
-    for key, value in service_update.model_dump().items():
-        setattr(service, key, value)
+    # Verify agent authentication
+    if not verify_secret(service_update.agent_secret, service.agent_secret_hash):
+        raise HTTPException(status_code=403, detail="Invalid agent_secret. Only the service owner can update it.")
+    
+    # Update only provided fields (excluding agent_secret)
+    update_data = service_update.model_dump(exclude={'agent_secret'}, exclude_unset=True)
+    for key, value in update_data.items():
+        if value is not None:
+            setattr(service, key, value)
     
     db.commit()
     db.refresh(service)
@@ -139,11 +159,19 @@ def update_service(service_id: int, service_update: ServiceCreate, db: Session =
 
 
 @router.delete("/{service_id}")
-def deactivate_service(service_id: int, db: Session = Depends(get_db)):
-    """Deactivate a service listing."""
+def deactivate_service(service_id: int, delete_request: ServiceDelete, db: Session = Depends(get_db)):
+    """
+    Deactivate a service listing.
+    
+    Requires agent_secret for authentication.
+    """
     service = db.query(Service).filter(Service.id == service_id).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
+    
+    # Verify agent authentication
+    if not verify_secret(delete_request.agent_secret, service.agent_secret_hash):
+        raise HTTPException(status_code=403, detail="Invalid agent_secret. Only the service owner can delete it.")
     
     service.is_active = False
     db.commit()

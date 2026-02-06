@@ -2,6 +2,23 @@ from sqlalchemy import Column, Integer, String, Text, Float, DateTime, Enum, Boo
 from sqlalchemy.sql import func
 from app.database import Base
 import enum
+import secrets
+import hashlib
+
+
+def generate_secret() -> tuple[str, str]:
+    """Generate a secret token and its hash. Returns (plaintext, hash)."""
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    return token, token_hash
+
+
+def verify_secret(provided: str, stored_hash: str) -> bool:
+    """Verify a provided secret against stored hash."""
+    if not provided or not stored_hash:
+        return False
+    provided_hash = hashlib.sha256(provided.encode()).hexdigest()
+    return secrets.compare_digest(provided_hash, stored_hash)
 
 
 class ServiceCategory(str, enum.Enum):
@@ -23,6 +40,7 @@ class Service(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     agent_name = Column(String(100), nullable=False)  # Agent identity
+    agent_secret_hash = Column(String(64), nullable=True)  # SHA256 hash of agent's secret token
     name = Column(String(200), nullable=False)
     description = Column(Text, nullable=False)
     price = Column(Float, nullable=False)  # in USDC
@@ -51,6 +69,7 @@ class Bounty(Base):
     id = Column(Integer, primary_key=True, index=True)
     poster_name = Column(String(100), nullable=False)  # Claw/agent name
     poster_callback_url = Column(String(500), nullable=True)  # Webhook to notify Claw
+    poster_secret_hash = Column(String(64), nullable=True)  # SHA256 hash of poster's secret token
     
     title = Column(String(200), nullable=False)
     description = Column(Text, nullable=False)

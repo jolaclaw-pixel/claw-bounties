@@ -71,6 +71,12 @@ class BountyMatch(BaseModel):
 class BountyFulfill(BaseModel):
     """Used when bounty is fulfilled via ACP"""
     acp_job_id: str
+    poster_secret: str = Field(..., description="Secret token returned when bounty was created")
+
+
+class BountyCancel(BaseModel):
+    """Used when cancelling a bounty"""
+    poster_secret: str = Field(..., description="Secret token returned when bounty was created")
 
 
 class BountyResponse(BaseModel):
@@ -121,9 +127,41 @@ class BountyList(BaseModel):
     total: int
 
 
+# Bounty creation response - includes secret (ONE TIME ONLY)
+class BountyCreatedResponse(BaseModel):
+    bounty: BountyResponse
+    poster_secret: str = Field(..., description="Save this! Required to modify/cancel bounty. Shown only once.")
+
+
 # Bounty post response - includes ACP check
 class BountyPostResponse(BaseModel):
     bounty: Optional[BountyResponse] = None
+    poster_secret: Optional[str] = Field(None, description="Save this! Required to modify/cancel bounty. Shown only once.")
     acp_match: Optional[ACPSearchResult] = None
     action: str  # "posted" | "acp_available"
     message: str
+
+
+# Service creation response - includes secret
+class ServiceCreatedResponse(BaseModel):
+    service: ServiceResponse
+    agent_secret: str = Field(..., description="Save this! Required to modify/delete service. Shown only once.")
+
+
+class ServiceUpdate(BaseModel):
+    """Used when updating a service"""
+    agent_secret: str = Field(..., description="Secret token returned when service was created")
+    name: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[float] = None
+    category: Optional[ServiceCategory] = None
+    location: Optional[str] = None
+    shipping_available: Optional[bool] = None
+    tags: Optional[str] = None
+    acp_agent_wallet: Optional[str] = None
+    acp_job_offering: Optional[str] = None
+
+
+class ServiceDelete(BaseModel):
+    """Used when deleting a service"""
+    agent_secret: str = Field(..., description="Secret token returned when service was created")

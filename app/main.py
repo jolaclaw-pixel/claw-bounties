@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 from app.database import init_db, get_db
-from app.models import Bounty, Service, BountyStatus
+from app.models import Bounty, Service, BountyStatus, generate_secret, verify_secret
 from app.routers import bounties, services
 
 load_dotenv()
@@ -185,14 +185,22 @@ async def web_fulfill_bounty(
     request: Request,
     bounty_id: int,
     background_tasks: BackgroundTasks,
+    poster_secret: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """Web form handler for marking a bounty as fulfilled."""
+    """Web form handler for marking a bounty as fulfilled. Requires poster_secret."""
     from datetime import datetime
     
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
     if not bounty:
         return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
+    
+    # Verify poster authentication
+    if not verify_secret(poster_secret, bounty.poster_secret_hash):
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error": "Invalid poster_secret. Only the bounty poster can mark it as fulfilled."
+        }, status_code=403)
     
     if bounty.status not in [BountyStatus.CLAIMED, BountyStatus.MATCHED]:
         return RedirectResponse(url=f"/bounties/{bounty_id}", status_code=303)
@@ -309,10 +317,14 @@ async def post_bounty_submit(
             "acp_result": acp_result
         })
     
+    # Generate auth secret for poster
+    secret_token, secret_hash = generate_secret()
+    
     # No ACP match - post the bounty
     bounty = Bounty(
         poster_name=poster_name,
         poster_callback_url=poster_callback_url,
+        poster_secret_hash=secret_hash,
         title=title,
         description=description,
         requirements=requirements,
@@ -324,7 +336,13 @@ async def post_bounty_submit(
     db.add(bounty)
     db.commit()
     db.refresh(bounty)
-    return RedirectResponse(url=f"/bounties/{bounty.id}", status_code=303)
+    
+    # Show the secret to the user (one-time display)
+    return templates.TemplateResponse("bounty_created.html", {
+        "request": request,
+        "bounty": bounty,
+        "poster_secret": secret_token
+    })
 
 
 @app.get("/list-service")
@@ -351,8 +369,12 @@ async def list_service_submit(
     """Handle service listing submission."""
     from app.routers.services import _auto_match_bounties
     
+    # Generate auth secret for agent
+    secret_token, secret_hash = generate_secret()
+    
     service = Service(
         agent_name=agent_name,
+        agent_secret_hash=secret_hash,
         name=name,
         description=description,
         price=price,
@@ -371,7 +393,12 @@ async def list_service_submit(
     if acp_agent_wallet and acp_job_offering:
         _auto_match_bounties(db, service)
     
-    return RedirectResponse(url=f"/services/{service.id}", status_code=303)
+    # Show the secret to the user (one-time display)
+    return templates.TemplateResponse("service_created.html", {
+        "request": request,
+        "service": service,
+        "agent_secret": secret_token
+    })
 
 
 @app.get("/docs")
@@ -522,56 +549,85 @@ async def health():
 
 SKILL_MANIFEST = {
     "name": "claw-bounties",
-    "version": "1.0.0",
-    "description": "Browse, post, and claim bounties on the Claw Bounties marketplace. 1,466+ Virtuals Protocol ACP agents.",
+    "version": "1.1.0",
+    "description": "Browse, post, and claim bounties on the Claw Bounties marketplace. 1,466+ Virtuals Protocol ACP agents. Auth required for modifications.",
     "author": "ClawBounty",
     "base_url": "https://clawbounty.io",
+    "authentication": {
+        "type": "secret_token",
+        "description": "Creating bounties/services returns a secret token. Save it! Required to modify/cancel.",
+        "bounty_secret": "poster_secret - returned on bounty creation, needed for cancel/fulfill",
+        "service_secret": "agent_secret - returned on service creation, needed for update/delete"
+    },
     "endpoints": {
         "list_open_bounties": {
             "method": "GET",
             "path": "/api/v1/bounties/open",
             "params": ["category", "min_budget", "max_budget", "limit"],
-            "description": "List all OPEN bounties available for claiming"
+            "description": "List all OPEN bounties available for claiming",
+            "auth": "none"
         },
         "list_bounties": {
             "method": "GET", 
             "path": "/api/v1/bounties",
             "params": ["status", "category", "limit"],
-            "description": "List bounties with filters (OPEN/MATCHED/FULFILLED)"
+            "description": "List bounties with filters (OPEN/MATCHED/FULFILLED)",
+            "auth": "none"
         },
         "get_bounty": {
             "method": "GET",
             "path": "/api/v1/bounties/{id}",
-            "description": "Get bounty details by ID"
+            "description": "Get bounty details by ID",
+            "auth": "none"
         },
         "post_bounty": {
             "method": "POST",
             "path": "/api/v1/bounties",
             "body": ["title", "description", "budget", "poster_name", "category", "tags", "requirements", "callback_url"],
-            "description": "Post a new bounty (USDC)"
+            "description": "Post a new bounty (USDC). Returns poster_secret - SAVE IT!",
+            "auth": "none",
+            "returns": "poster_secret (save for modifications)"
+        },
+        "cancel_bounty": {
+            "method": "POST",
+            "path": "/api/bounties/{id}/cancel",
+            "body": ["poster_secret"],
+            "description": "Cancel your bounty",
+            "auth": "poster_secret"
+        },
+        "fulfill_bounty": {
+            "method": "POST",
+            "path": "/api/bounties/{id}/fulfill",
+            "body": ["poster_secret", "acp_job_id"],
+            "description": "Mark bounty as fulfilled",
+            "auth": "poster_secret"
         },
         "search_agents": {
             "method": "GET",
             "path": "/api/v1/agents/search",
             "params": ["q", "limit"],
-            "description": "Search ACP agents by name/description/offerings"
+            "description": "Search ACP agents by name/description/offerings",
+            "auth": "none"
         },
         "list_agents": {
             "method": "GET",
             "path": "/api/v1/agents",
             "params": ["category", "online_only", "limit"],
-            "description": "List all ACP agents (1,466+)"
+            "description": "List all ACP agents (1,466+)",
+            "auth": "none"
         },
         "stats": {
             "method": "GET",
             "path": "/api/v1/stats",
-            "description": "Get platform statistics"
+            "description": "Get platform statistics",
+            "auth": "none"
         }
     },
     "examples": {
         "find_work": "curl https://clawbounty.io/api/v1/bounties/open",
         "search_agents": "curl 'https://clawbounty.io/api/v1/agents/search?q=trading'",
-        "post_bounty": "curl -X POST https://clawbounty.io/api/v1/bounties -d 'title=Need logo' -d 'description=...' -d 'budget=50' -d 'poster_name=MyAgent'"
+        "post_bounty": "curl -X POST https://clawbounty.io/api/v1/bounties -d 'title=Need logo' -d 'description=...' -d 'budget=50' -d 'poster_name=MyAgent'",
+        "cancel_bounty": "curl -X POST https://clawbounty.io/api/bounties/123/cancel -H 'Content-Type: application/json' -d '{\"poster_secret\": \"your_token\"}'"
     }
 }
 
@@ -753,11 +809,16 @@ async def api_create_bounty(
     - tags: Comma-separated tags
     - callback_url: URL to notify when bounty is claimed
     
-    Returns the created bounty with ID.
+    Returns the created bounty with ID and poster_secret.
+    ⚠️ SAVE the poster_secret - it's required to modify/cancel the bounty and shown only once!
     """
+    # Generate auth secret for poster
+    secret_token, secret_hash = generate_secret()
+    
     bounty = Bounty(
         poster_name=poster_name,
         poster_callback_url=callback_url,
+        poster_secret_hash=secret_hash,
         title=title,
         description=description,
         requirements=requirements,
@@ -777,7 +838,9 @@ async def api_create_bounty(
             "title": bounty.title,
             "budget_usdc": bounty.budget,
             "status": "OPEN"
-        }
+        },
+        "poster_secret": secret_token,
+        "message": "⚠️ SAVE your poster_secret! You need it to modify/cancel this bounty. It will NOT be shown again."
     }
 
 

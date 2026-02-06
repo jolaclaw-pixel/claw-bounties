@@ -10,10 +10,10 @@ import httpx
 import logging
 
 from app.database import get_db
-from app.models import Bounty, BountyStatus, Service
+from app.models import Bounty, BountyStatus, Service, generate_secret, verify_secret
 from app.schemas import (
     BountyCreate, BountyResponse, BountyList, 
-    BountyMatch, BountyFulfill, BountyPostResponse,
+    BountyMatch, BountyFulfill, BountyCancel, BountyPostResponse,
     ACPSearchResult, ACPAgent
 )
 
@@ -90,6 +90,8 @@ async def create_bounty(bounty: BountyCreate, db: Session = Depends(get_db)):
     """
     Create a new bounty. 
     First checks ACP registry - if matching service exists, returns that instead of posting.
+    
+    Returns a poster_secret token - SAVE THIS! It's required to modify/cancel the bounty.
     """
     # Build search query from bounty details
     search_query = f"{bounty.title} {bounty.tags or ''}"
@@ -101,15 +103,20 @@ async def create_bounty(bounty: BountyCreate, db: Session = Depends(get_db)):
         # Service already exists on ACP - tell Claw to use it directly
         return BountyPostResponse(
             bounty=None,
+            poster_secret=None,
             acp_match=acp_result,
             action="acp_available",
             message=f"Service already available on ACP! Found {len(acp_result.agents)} matching agent(s). Use ACP to fulfill your request directly."
         )
     
+    # Generate auth secret for poster
+    secret_token, secret_hash = generate_secret()
+    
     # No ACP match - post the bounty
     db_bounty = Bounty(
         poster_name=bounty.poster_name,
         poster_callback_url=bounty.poster_callback_url,
+        poster_secret_hash=secret_hash,
         title=bounty.title,
         description=bounty.description,
         requirements=bounty.requirements,
@@ -124,9 +131,10 @@ async def create_bounty(bounty: BountyCreate, db: Session = Depends(get_db)):
     
     return BountyPostResponse(
         bounty=BountyResponse.model_validate(db_bounty),
+        poster_secret=secret_token,
         acp_match=acp_result,
         action="posted",
-        message="Bounty posted! No matching service found on ACP yet. You'll be notified when someone builds it."
+        message="Bounty posted! SAVE YOUR poster_secret - you need it to modify/cancel this bounty. No matching service found on ACP yet."
     )
 
 
@@ -271,10 +279,17 @@ async def fulfill_bounty(
     """
     Mark bounty as fulfilled after ACP job completion.
     Called by the poster's Claw after successfully using the ACP service.
+    
+    Requires poster_secret for authentication.
     """
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
     if not bounty:
         raise HTTPException(status_code=404, detail="Bounty not found")
+    
+    # Verify poster authentication
+    if not verify_secret(fulfill.poster_secret, bounty.poster_secret_hash):
+        raise HTTPException(status_code=403, detail="Invalid poster_secret. Only the bounty poster can fulfill it.")
+    
     if bounty.status not in [BountyStatus.MATCHED, BountyStatus.CLAIMED]:
         raise HTTPException(status_code=400, detail="Bounty must be claimed or matched before fulfilling")
     
@@ -303,11 +318,24 @@ async def fulfill_bounty(
 
 
 @router.post("/{bounty_id}/cancel", response_model=BountyResponse)
-def cancel_bounty(bounty_id: int, db: Session = Depends(get_db)):
-    """Cancel a bounty."""
+def cancel_bounty(
+    bounty_id: int, 
+    cancel: BountyCancel,
+    db: Session = Depends(get_db)
+):
+    """
+    Cancel a bounty.
+    
+    Requires poster_secret for authentication.
+    """
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
     if not bounty:
         raise HTTPException(status_code=404, detail="Bounty not found")
+    
+    # Verify poster authentication
+    if not verify_secret(cancel.poster_secret, bounty.poster_secret_hash):
+        raise HTTPException(status_code=403, detail="Invalid poster_secret. Only the bounty poster can cancel it.")
+    
     if bounty.status == BountyStatus.FULFILLED:
         raise HTTPException(status_code=400, detail="Cannot cancel fulfilled bounty")
     
