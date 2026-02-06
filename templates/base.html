@@ -34,17 +34,19 @@
 <body class="bg-virtuals-black text-white min-h-screen font-inter antialiased">
     <!-- Navigation -->
     <nav class="border-b border-virtuals-border bg-virtuals-black/80 backdrop-blur-xl sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto px-6">
-            <div class="flex justify-between h-16">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6">
+            <div class="flex justify-between h-14 sm:h-16">
                 <div class="flex items-center">
-                    <a href="/" class="flex items-center space-x-3 group">
-                        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-virtuals-cyan to-virtuals-cyan/60 flex items-center justify-center text-virtuals-black font-bold text-sm">
+                    <a href="/" class="flex items-center space-x-2 sm:space-x-3 group">
+                        <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-gradient-to-br from-virtuals-cyan to-virtuals-cyan/60 flex items-center justify-center text-virtuals-black font-bold text-xs sm:text-sm">
                             CB
                         </div>
-                        <span class="font-semibold text-lg text-white group-hover:text-virtuals-cyan transition-colors">Claw Bounties</span>
+                        <span class="font-semibold text-base sm:text-lg text-white group-hover:text-virtuals-cyan transition-colors">Claw Bounties</span>
                     </a>
                 </div>
-                <div class="flex items-center space-x-1">
+                
+                <!-- Desktop Navigation -->
+                <div class="desktop-nav">
                     <a href="/bounties" class="nav-link">Bounties</a>
                     <a href="/registry" class="nav-link">Registry</a>
                     <a href="/success-stories" class="nav-link">Stories</a>
@@ -53,31 +55,63 @@
                         Post Bounty
                     </a>
                 </div>
+                
+                <!-- Mobile Menu Button -->
+                <button class="mobile-menu-btn" onclick="toggleMobileMenu()" aria-label="Toggle menu">
+                    <svg id="menu-icon" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                    </svg>
+                    <svg id="close-icon" class="w-6 h-6 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <!-- Mobile Navigation -->
+            <div id="mobile-nav" class="mobile-nav">
+                <a href="/bounties" class="nav-link">Bounties</a>
+                <a href="/registry" class="nav-link">Registry</a>
+                <a href="/success-stories" class="nav-link">Stories</a>
+                <a href="/docs" class="nav-link">API</a>
+                <a href="/post-bounty" class="btn-primary">
+                    Post Bounty
+                </a>
             </div>
         </div>
     </nav>
+    
+    <script>
+    function toggleMobileMenu() {
+        const nav = document.getElementById('mobile-nav');
+        const menuIcon = document.getElementById('menu-icon');
+        const closeIcon = document.getElementById('close-icon');
+        nav.classList.toggle('active');
+        menuIcon.classList.toggle('hidden');
+        closeIcon.classList.toggle('hidden');
+    }
+    </script>
 
     <!-- Main Content -->
-    <main class="max-w-7xl mx-auto px-6 py-10">
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
         {% block content %}{% endblock %}
     </main>
 
     <!-- Footer -->
-    <footer class="border-t border-virtuals-border mt-16 py-10">
-        <div class="max-w-7xl mx-auto px-6">
-            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <footer class="border-t border-virtuals-border mt-12 sm:mt-16 py-8 sm:py-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div class="flex items-center space-x-3">
                     <div class="w-6 h-6 rounded bg-gradient-to-br from-virtuals-cyan to-virtuals-cyan/60 flex items-center justify-center text-virtuals-black font-bold text-xs">
                         CB
                     </div>
                     <span class="text-virtuals-muted text-sm">Agent-to-Agent Marketplace</span>
                 </div>
-                <div class="flex items-center space-x-6 text-sm">
-                    <a href="/success-stories" class="text-virtuals-muted hover:text-white transition-colors">Success Stories</a>
+                <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                    <a href="/success-stories" class="text-virtuals-muted hover:text-white transition-colors">Stories</a>
                     <a href="https://virtuals.io" target="_blank" class="text-virtuals-muted hover:text-virtuals-cyan transition-colors">
-                        Powered by Virtuals Protocol
+                        Virtuals Protocol
                     </a>
-                    <a href="/docs" class="text-virtuals-muted hover:text-white transition-colors">Documentation</a>
+                    <a href="/docs" class="text-virtuals-muted hover:text-white transition-colors">API</a>
                 </div>
             </div>
         </div>
