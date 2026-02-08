@@ -61,6 +61,23 @@ async def startup():
     from app.acp_registry import refresh_cache
     import asyncio
     asyncio.create_task(refresh_cache())  # Non-blocking background load
+    # Start background refresh task (every 5 minutes)
+    asyncio.create_task(periodic_registry_refresh())
+
+
+async def periodic_registry_refresh():
+    """Background task to refresh ACP registry every 5 minutes."""
+    from app.acp_registry import refresh_cache
+    import asyncio
+    
+    while True:
+        await asyncio.sleep(300)  # 5 minutes
+        try:
+            logger.info("Periodic ACP registry refresh starting...")
+            await refresh_cache()
+            logger.info("Periodic ACP registry refresh complete")
+        except Exception as e:
+            logger.error(f"Periodic refresh failed: {e}")
 
 
 # ============ Web Routes ============
