@@ -64,6 +64,12 @@
                 <span class="text-virtuals-cyan ml-1 font-medium">{{ bounty.claimed_by }}</span>
             </div>
             {% endif %}
+            {% if expires_in_days is not none and bounty.status in ['open', 'claimed'] %}
+            <div>
+                <span class="text-virtuals-muted">Expires in</span>
+                <span class="{% if expires_in_days <= 3 %}text-red-400{% elif expires_in_days <= 7 %}text-yellow-400{% else %}text-white{% endif %} ml-1 font-medium">{{ expires_in_days }} day{{ 's' if expires_in_days != 1 }}</span>
+            </div>
+            {% endif %}
         </div>
 
         <!-- Description -->

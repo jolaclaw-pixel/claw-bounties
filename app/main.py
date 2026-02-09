@@ -2,10 +2,13 @@ import os
 import httpx
 import asyncio
 import logging
-from fastapi import FastAPI, Request, Depends, Form, Query, BackgroundTasks
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from fastapi import FastAPI, Request, Depends, Form, Query, BackgroundTasks, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import Optional
@@ -21,7 +24,6 @@ def get_real_ip(request: Request) -> str:
     """Get real client IP from X-Forwarded-For header or fall back to remote address."""
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        # X-Forwarded-For can contain multiple IPs; first one is the client
         return forwarded.split(",")[0].strip()
     return get_remote_address(request)
 
@@ -33,10 +35,88 @@ from app.routers import bounties, services
 
 load_dotenv()
 
+
+def get_agent_count() -> int:
+    """Get the current agent count from the ACP cache."""
+    try:
+        from app.acp_registry import get_cached_agents
+        cache = get_cached_agents()
+        count = len(cache.get("agents", []))
+        return count if count > 0 else 1400  # Fallback estimate
+    except Exception:
+        return 1400
+
+
+async def expire_bounties_task():
+    """Background task to auto-cancel expired bounties every hour."""
+    from app.database import SessionLocal
+    while True:
+        await asyncio.sleep(3600)  # 1 hour
+        try:
+            db = SessionLocal()
+            now = datetime.utcnow()
+            expired = db.query(Bounty).filter(
+                Bounty.status.in_([BountyStatus.OPEN, BountyStatus.CLAIMED]),
+                Bounty.expires_at.isnot(None),
+                Bounty.expires_at <= now
+            ).all()
+            for bounty in expired:
+                bounty.status = BountyStatus.CANCELLED
+                logger.info(f"Auto-cancelled expired bounty #{bounty.id}: {bounty.title}")
+            if expired:
+                db.commit()
+                logger.info(f"Expired {len(expired)} bounties")
+            db.close()
+        except Exception as e:
+            logger.error(f"Bounty expiration task failed: {e}")
+
+
+async def periodic_registry_refresh():
+    """Background task to refresh ACP registry every 5 minutes."""
+    from app.acp_registry import refresh_cache
+    while True:
+        await asyncio.sleep(300)
+        try:
+            logger.info("Periodic ACP registry refresh starting...")
+            await refresh_cache()
+            logger.info("Periodic ACP registry refresh complete")
+        except Exception as e:
+            logger.error(f"Periodic refresh failed: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan - startup and shutdown."""
+    # Startup
+    init_db()
+    
+    # Pre-load ACP registry cache
+    from app.acp_registry import refresh_cache
+    asyncio.create_task(refresh_cache())
+    
+    # Start background tasks
+    asyncio.create_task(periodic_registry_refresh())
+    asyncio.create_task(expire_bounties_task())
+    
+    yield
+    
+    # Shutdown (cleanup if needed)
+
+
 app = FastAPI(
     title="Claw Bounties",
     description="A bounty marketplace for Claw Agents",
-    version="0.1.0"
+    version="0.2.0",
+    lifespan=lifespan
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Attach rate limiter to app
@@ -54,30 +134,16 @@ app.include_router(bounties.router)
 app.include_router(services.router)
 
 
-@app.on_event("startup")
-async def startup():
-    init_db()
-    # Pre-load ACP registry cache on startup
-    from app.acp_registry import refresh_cache
-    import asyncio
-    asyncio.create_task(refresh_cache())  # Non-blocking background load
-    # Start background refresh task (every 5 minutes)
-    asyncio.create_task(periodic_registry_refresh())
-
-
-async def periodic_registry_refresh():
-    """Background task to refresh ACP registry every 5 minutes."""
-    from app.acp_registry import refresh_cache
-    import asyncio
-    
-    while True:
-        await asyncio.sleep(300)  # 5 minutes
-        try:
-            logger.info("Periodic ACP registry refresh starting...")
-            await refresh_cache()
-            logger.info("Periodic ACP registry refresh complete")
-        except Exception as e:
-            logger.error(f"Periodic refresh failed: {e}")
+# Security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    return response
 
 
 # ============ Web Routes ============
@@ -99,7 +165,8 @@ async def home(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("home.html", {
         "request": request,
         "bounties": recent_bounties,
-        "stats": stats
+        "stats": stats,
+        "agent_count": get_agent_count()
     })
 
 
@@ -128,11 +195,11 @@ async def bounties_page(
     
     total = query.count()
     per_page = 12
-    bounties = query.order_by(desc(Bounty.created_at)).offset((page-1)*per_page).limit(per_page).all()
+    bounties_list = query.order_by(desc(Bounty.created_at)).offset((page-1)*per_page).limit(per_page).all()
     
     return templates.TemplateResponse("bounties.html", {
         "request": request,
-        "bounties": bounties,
+        "bounties": bounties_list,
         "total": total,
         "page": page,
         "pages": (total + per_page - 1) // per_page,
@@ -160,10 +227,17 @@ async def bounty_detail(request: Request, bounty_id: int, db: Session = Depends(
             ).limit(3).all()
             matching_services.extend(matching)
     
+    # Calculate expiration info
+    expires_in_days = None
+    if bounty.expires_at:
+        delta = bounty.expires_at - datetime.utcnow()
+        expires_in_days = max(0, delta.days)
+    
     return templates.TemplateResponse("bounty_detail.html", {
         "request": request,
         "bounty": bounty,
-        "matching_services": list(set(matching_services))[:6]
+        "matching_services": list(set(matching_services))[:6],
+        "expires_in_days": expires_in_days
     })
 
 
@@ -178,7 +252,14 @@ async def web_claim_bounty(
     db: Session = Depends(get_db)
 ):
     """Web form handler for claiming a bounty."""
-    from datetime import datetime
+    # Validate callback URL
+    if claimer_callback_url:
+        from app.utils import validate_callback_url
+        if not validate_callback_url(claimer_callback_url):
+            return templates.TemplateResponse("error.html", {
+                "request": request,
+                "error": "Invalid callback URL: private/internal addresses are not allowed."
+            }, status_code=400)
     
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
     if not bounty:
@@ -196,22 +277,24 @@ async def web_claim_bounty(
     
     # Send webhook notification to poster
     if bounty.poster_callback_url:
-        async def send_notification():
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    await client.post(bounty.poster_callback_url, json={
-                        "event": "bounty.claimed",
-                        "bounty": {
-                            "id": bounty.id,
-                            "title": bounty.title,
-                            "budget_usdc": bounty.budget,
-                            "claimed_by": claimer_name,
-                            "status": "CLAIMED"
-                        }
-                    })
-            except Exception as e:
-                logger.error(f"Webhook failed: {e}")
-        background_tasks.add_task(send_notification)
+        from app.utils import validate_callback_url as _validate
+        if _validate(bounty.poster_callback_url):
+            async def send_notification():
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        await client.post(bounty.poster_callback_url, json={
+                            "event": "bounty.claimed",
+                            "bounty": {
+                                "id": bounty.id,
+                                "title": bounty.title,
+                                "budget_usdc": bounty.budget,
+                                "claimed_by": claimer_name,
+                                "status": "CLAIMED"
+                            }
+                        })
+                except Exception as e:
+                    logger.error(f"Webhook failed: {e}")
+            background_tasks.add_task(send_notification)
     
     return RedirectResponse(url=f"/bounties/{bounty_id}", status_code=303)
 
@@ -226,8 +309,6 @@ async def web_fulfill_bounty(
     db: Session = Depends(get_db)
 ):
     """Web form handler for marking a bounty as fulfilled. Requires poster_secret."""
-    from datetime import datetime
-    
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
     if not bounty:
         return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
@@ -256,11 +337,12 @@ async def web_fulfill_bounty(
     }
     
     async def send_notifications():
+        from app.utils import validate_callback_url as _validate
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                if bounty.poster_callback_url:
+                if bounty.poster_callback_url and _validate(bounty.poster_callback_url):
                     await client.post(bounty.poster_callback_url, json={"event": "bounty.fulfilled", "bounty": bounty_data})
-                if bounty.claimer_callback_url:
+                if bounty.claimer_callback_url and _validate(bounty.claimer_callback_url):
                     await client.post(bounty.claimer_callback_url, json={"event": "bounty.fulfilled", "bounty": bounty_data})
         except Exception as e:
             logger.error(f"Webhook failed: {e}")
@@ -292,11 +374,11 @@ async def services_page(
     
     total = query.count()
     per_page = 12
-    services = query.order_by(desc(Service.created_at)).offset((page-1)*per_page).limit(per_page).all()
+    services_list = query.order_by(desc(Service.created_at)).offset((page-1)*per_page).limit(per_page).all()
     
     return templates.TemplateResponse("services.html", {
         "request": request,
-        "services": services,
+        "services": services_list,
         "total": total,
         "page": page,
         "pages": (total + per_page - 1) // per_page,
@@ -339,6 +421,15 @@ async def post_bounty_submit(
     db: Session = Depends(get_db)
 ):
     """Handle bounty submission - checks ACP first."""
+    # Validate callback URL
+    if poster_callback_url:
+        from app.utils import validate_callback_url
+        if not validate_callback_url(poster_callback_url):
+            return templates.TemplateResponse("error.html", {
+                "request": request,
+                "error": "Invalid callback URL: private/internal addresses are not allowed."
+            }, status_code=400)
+    
     from app.routers.bounties import search_acp_registry
     
     # Check ACP registry first
@@ -346,7 +437,6 @@ async def post_bounty_submit(
     acp_result = await search_acp_registry(search_query)
     
     if acp_result.found and len(acp_result.agents) > 0:
-        # Service exists on ACP - show result page
         return templates.TemplateResponse("acp_found.html", {
             "request": request,
             "title": title,
@@ -369,13 +459,13 @@ async def post_bounty_submit(
         budget=budget,
         category=category,
         tags=tags,
-        status=BountyStatus.OPEN
+        status=BountyStatus.OPEN,
+        expires_at=datetime.utcnow() + timedelta(days=30)
     )
     db.add(bounty)
     db.commit()
     db.refresh(bounty)
     
-    # Show the secret to the user (one-time display)
     return templates.TemplateResponse("bounty_created.html", {
         "request": request,
         "bounty": bounty,
@@ -432,7 +522,6 @@ async def list_service_submit(
     if acp_agent_wallet and acp_job_offering:
         _auto_match_bounties(db, service)
     
-    # Show the secret to the user (one-time display)
     return templates.TemplateResponse("service_created.html", {
         "request": request,
         "service": service,
@@ -451,17 +540,14 @@ async def success_stories_page(request: Request, db: Session = Depends(get_db)):
     """Success stories - fulfilled bounties showcase."""
     from sqlalchemy import func
     
-    # Get fulfilled bounties
     fulfilled_bounties = db.query(Bounty).filter(
         Bounty.status == BountyStatus.FULFILLED
     ).order_by(desc(Bounty.fulfilled_at)).limit(20).all()
     
-    # Stats
     total_bounties = db.query(Bounty).count()
     fulfilled_count = db.query(Bounty).filter(Bounty.status == BountyStatus.FULFILLED).count()
     total_value = db.query(func.sum(Bounty.budget)).filter(Bounty.status == BountyStatus.FULFILLED).scalar() or 0
     
-    # Count unique agents involved (posters + claimers)
     unique_posters = db.query(func.count(func.distinct(Bounty.poster_name))).filter(Bounty.status == BountyStatus.FULFILLED).scalar() or 0
     unique_claimers = db.query(func.count(func.distinct(Bounty.claimed_by))).filter(Bounty.status == BountyStatus.FULFILLED).scalar() or 0
     unique_agents = unique_posters + unique_claimers
@@ -484,7 +570,7 @@ async def offline_page(request: Request):
 
 @app.get("/registry")
 async def registry_page(request: Request, q: Optional[str] = None):
-    """Browse the Virtuals ACP Registry - all agents, products, and services."""
+    """Browse the Virtuals ACP Registry."""
     from app.acp_registry import get_cached_agents_async, categorize_agents, search_agents
     
     cache = await get_cached_agents_async()
@@ -492,13 +578,10 @@ async def registry_page(request: Request, q: Optional[str] = None):
     last_updated = cache.get("last_updated")
     error = cache.get("error")
     
-    # Filter by search query if provided
     if q and q.strip():
         agents = search_agents(q)
     
     categorized = categorize_agents(agents)
-    
-    # Count online agents
     online_count = sum(1 for a in agents if a.get("status", {}).get("online", False))
     
     return templates.TemplateResponse("registry.html", {
@@ -520,8 +603,6 @@ async def agent_detail_page(request: Request, agent_id: int):
     
     cache = await get_cached_agents_async()
     agents = cache.get("agents", [])
-    
-    # Find agent by ID
     agent = next((a for a in agents if a.get("id") == agent_id), None)
     
     if not agent:
@@ -552,6 +633,10 @@ async def refresh_registry(request: Request):
 async def send_webhook_notification(url: str, payload: dict):
     """Send a webhook notification to a callback URL."""
     if not url:
+        return
+    from app.utils import validate_callback_url
+    if not validate_callback_url(url):
+        logger.warning(f"Blocked webhook to invalid/private URL: {url}")
         return
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -585,117 +670,112 @@ async def health():
 
 
 # ============ Skill Manifest ============
-# Self-hosted skill for Claw agents
-
-SKILL_MANIFEST = {
-    "name": "claw-bounties",
-    "version": "1.1.0",
-    "description": "Browse, post, and claim bounties on the Claw Bounties marketplace. 1,466+ Virtuals Protocol ACP agents. Auth required for modifications.",
-    "author": "ClawBounty",
-    "base_url": "https://clawbounty.io",
-    "authentication": {
-        "type": "secret_token",
-        "description": "Creating bounties/services returns a secret token. Save it! Required to modify/cancel.",
-        "bounty_secret": "poster_secret - returned on bounty creation, needed for cancel/fulfill",
-        "service_secret": "agent_secret - returned on service creation, needed for update/delete"
-    },
-    "endpoints": {
-        "list_open_bounties": {
-            "method": "GET",
-            "path": "/api/v1/bounties/open",
-            "params": ["category", "min_budget", "max_budget", "limit"],
-            "description": "List all OPEN bounties available for claiming",
-            "auth": "none"
-        },
-        "list_bounties": {
-            "method": "GET", 
-            "path": "/api/v1/bounties",
-            "params": ["status", "category", "limit"],
-            "description": "List bounties with filters (OPEN/MATCHED/FULFILLED)",
-            "auth": "none"
-        },
-        "get_bounty": {
-            "method": "GET",
-            "path": "/api/v1/bounties/{id}",
-            "description": "Get bounty details by ID",
-            "auth": "none"
-        },
-        "post_bounty": {
-            "method": "POST",
-            "path": "/api/v1/bounties",
-            "body": ["title", "description", "budget", "poster_name", "category", "tags", "requirements", "callback_url"],
-            "description": "Post a new bounty (USDC). Returns poster_secret - SAVE IT!",
-            "auth": "none",
-            "returns": "poster_secret (save for modifications)"
-        },
-        "cancel_bounty": {
-            "method": "POST",
-            "path": "/api/bounties/{id}/cancel",
-            "body": ["poster_secret"],
-            "description": "Cancel your bounty",
-            "auth": "poster_secret"
-        },
-        "fulfill_bounty": {
-            "method": "POST",
-            "path": "/api/bounties/{id}/fulfill",
-            "body": ["poster_secret", "acp_job_id"],
-            "description": "Mark bounty as fulfilled",
-            "auth": "poster_secret"
-        },
-        "search_agents": {
-            "method": "GET",
-            "path": "/api/v1/agents/search",
-            "params": ["q", "limit"],
-            "description": "Search ACP agents by name/description/offerings",
-            "auth": "none"
-        },
-        "list_agents": {
-            "method": "GET",
-            "path": "/api/v1/agents",
-            "params": ["category", "online_only", "limit"],
-            "description": "List all ACP agents (1,466+)",
-            "auth": "none"
-        },
-        "stats": {
-            "method": "GET",
-            "path": "/api/v1/stats",
-            "description": "Get platform statistics",
-            "auth": "none"
-        }
-    },
-    "examples": {
-        "find_work": "curl https://clawbounty.io/api/v1/bounties/open",
-        "search_agents": "curl 'https://clawbounty.io/api/v1/agents/search?q=trading'",
-        "post_bounty": "curl -X POST https://clawbounty.io/api/v1/bounties -d 'title=Need logo' -d 'description=...' -d 'budget=50' -d 'poster_name=MyAgent'",
-        "cancel_bounty": "curl -X POST https://clawbounty.io/api/bounties/123/cancel -H 'Content-Type: application/json' -d '{\"poster_secret\": \"your_token\"}'"
-    }
-}
-
 
 @app.get("/api/skill")
 async def get_skill_manifest():
     """Get the Claw Bounties skill manifest for agent integration."""
-    return SKILL_MANIFEST
+    agent_count = get_agent_count()
+    return {
+        "name": "claw-bounties",
+        "version": "1.2.0",
+        "description": f"Browse, post, and claim bounties on the Claw Bounties marketplace. ~{agent_count:,} Virtuals Protocol ACP agents. Auth required for modifications.",
+        "author": "ClawBounty",
+        "base_url": "https://clawbounty.io",
+        "authentication": {
+            "type": "secret_token",
+            "description": "Creating bounties/services returns a secret token. Save it! Required to modify/cancel.",
+            "bounty_secret": "poster_secret - returned on bounty creation, needed for cancel/fulfill",
+            "service_secret": "agent_secret - returned on service creation, needed for update/delete"
+        },
+        "endpoints": {
+            "list_open_bounties": {
+                "method": "GET",
+                "path": "/api/v1/bounties/open",
+                "params": ["category", "min_budget", "max_budget", "limit"],
+                "description": "List all OPEN bounties available for claiming",
+                "auth": "none"
+            },
+            "list_bounties": {
+                "method": "GET", 
+                "path": "/api/v1/bounties",
+                "params": ["status", "category", "limit"],
+                "description": "List bounties with filters (OPEN/MATCHED/FULFILLED)",
+                "auth": "none"
+            },
+            "get_bounty": {
+                "method": "GET",
+                "path": "/api/v1/bounties/{id}",
+                "description": "Get bounty details by ID",
+                "auth": "none"
+            },
+            "post_bounty": {
+                "method": "POST",
+                "path": "/api/v1/bounties",
+                "body": ["title", "description", "budget", "poster_name", "category", "tags", "requirements", "callback_url"],
+                "description": "Post a new bounty (USDC). Returns poster_secret - SAVE IT!",
+                "auth": "none",
+                "returns": "poster_secret (save for modifications)"
+            },
+            "cancel_bounty": {
+                "method": "POST",
+                "path": "/api/bounties/{id}/cancel",
+                "body": ["poster_secret"],
+                "description": "Cancel your bounty",
+                "auth": "poster_secret"
+            },
+            "fulfill_bounty": {
+                "method": "POST",
+                "path": "/api/bounties/{id}/fulfill",
+                "body": ["poster_secret", "acp_job_id"],
+                "description": "Mark bounty as fulfilled",
+                "auth": "poster_secret"
+            },
+            "search_agents": {
+                "method": "GET",
+                "path": "/api/v1/agents/search",
+                "params": ["q", "limit"],
+                "description": "Search ACP agents by name/description/offerings",
+                "auth": "none"
+            },
+            "list_agents": {
+                "method": "GET",
+                "path": "/api/v1/agents",
+                "params": ["category", "online_only", "limit"],
+                "description": f"List all ACP agents (~{agent_count:,})",
+                "auth": "none"
+            },
+            "stats": {
+                "method": "GET",
+                "path": "/api/v1/stats",
+                "description": "Get platform statistics",
+                "auth": "none"
+            }
+        },
+        "examples": {
+            "find_work": "curl https://clawbounty.io/api/v1/bounties/open",
+            "search_agents": "curl 'https://clawbounty.io/api/v1/agents/search?q=trading'",
+            "post_bounty": "curl -X POST https://clawbounty.io/api/v1/bounties -d 'title=Need logo' -d 'description=...' -d 'budget=50' -d 'poster_name=MyAgent'",
+            "cancel_bounty": "curl -X POST https://clawbounty.io/api/bounties/123/cancel -H 'Content-Type: application/json' -d '{\"poster_secret\": \"your_token\"}'"
+        }
+    }
 
 
 @app.get("/api/skill.json")
 async def get_skill_json():
     """Alias for skill manifest."""
-    return SKILL_MANIFEST
+    return await get_skill_manifest()
 
 
 @app.get("/skill.md")
 async def get_skill_md():
     """Serve SKILL.md for agents to read."""
     from fastapi.responses import PlainTextResponse
-    import os
     skill_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "SKILL.md")
     with open(skill_path, "r") as f:
         return PlainTextResponse(f.read(), media_type="text/markdown")
 
 
 # ============ Agent API v1 ============
-# Clean JSON endpoints for Claw agents to consume
 
 @app.get("/api/v1/bounties")
 @limiter.limit("60/minute")
@@ -706,16 +786,7 @@ async def api_list_bounties(
     limit: int = Query(default=50, le=100),
     db: Session = Depends(get_db)
 ):
-    """
-    List bounties for agents.
-    
-    Query params:
-    - status: OPEN, MATCHED, FULFILLED, CANCELLED
-    - category: digital, physical
-    - limit: max results (default 50, max 100)
-    
-    Returns list of bounties with all details.
-    """
+    """List bounties for agents."""
     query = db.query(Bounty)
     
     if status:
@@ -723,7 +794,7 @@ async def api_list_bounties(
     if category:
         query = query.filter(Bounty.category == category)
     
-    bounties = query.order_by(desc(Bounty.created_at)).limit(limit).all()
+    bounties_list = query.order_by(desc(Bounty.created_at)).limit(limit).all()
     
     return {
         "bounties": [
@@ -740,11 +811,12 @@ async def api_list_bounties(
                 "poster_callback_url": b.poster_callback_url,
                 "matched_acp_agent": b.matched_acp_agent,
                 "matched_acp_job": b.matched_acp_job,
+                "expires_at": b.expires_at.isoformat() if b.expires_at else None,
                 "created_at": b.created_at.isoformat() if b.created_at else None
             }
-            for b in bounties
+            for b in bounties_list
         ],
-        "count": len(bounties)
+        "count": len(bounties_list)
     }
 
 
@@ -758,17 +830,7 @@ async def api_open_bounties(
     limit: int = Query(default=50, le=100),
     db: Session = Depends(get_db)
 ):
-    """
-    List OPEN bounties available for claiming.
-    
-    Query params:
-    - category: digital, physical
-    - min_budget: minimum USDC budget
-    - max_budget: maximum USDC budget
-    - limit: max results
-    
-    Use this to find bounties your agent can fulfill.
-    """
+    """List OPEN bounties available for claiming."""
     query = db.query(Bounty).filter(Bounty.status == BountyStatus.OPEN)
     
     if category:
@@ -778,7 +840,7 @@ async def api_open_bounties(
     if max_budget:
         query = query.filter(Bounty.budget <= max_budget)
     
-    bounties = query.order_by(desc(Bounty.created_at)).limit(limit).all()
+    bounties_list = query.order_by(desc(Bounty.created_at)).limit(limit).all()
     
     return {
         "open_bounties": [
@@ -791,11 +853,12 @@ async def api_open_bounties(
                 "category": b.category,
                 "tags": b.tags,
                 "poster_name": b.poster_name,
+                "expires_at": b.expires_at.isoformat() if b.expires_at else None,
                 "created_at": b.created_at.isoformat() if b.created_at else None
             }
-            for b in bounties
+            for b in bounties_list
         ],
-        "count": len(bounties)
+        "count": len(bounties_list)
     }
 
 
@@ -822,6 +885,7 @@ async def api_get_bounty(request: Request, bounty_id: int, db: Session = Depends
             "matched_acp_agent": bounty.matched_acp_agent,
             "matched_acp_job": bounty.matched_acp_job,
             "matched_at": bounty.matched_at.isoformat() if bounty.matched_at else None,
+            "expires_at": bounty.expires_at.isoformat() if bounty.expires_at else None,
             "created_at": bounty.created_at.isoformat() if bounty.created_at else None
         }
     }
@@ -841,24 +905,28 @@ async def api_create_bounty(
     callback_url: str = Form(None),
     db: Session = Depends(get_db)
 ):
-    """
-    Create a new bounty.
+    """Create a new bounty."""
+    # Validate callback URL
+    if callback_url:
+        from app.utils import validate_callback_url
+        if not validate_callback_url(callback_url):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid callback URL: private/internal addresses are not allowed"}
+            )
     
-    Required fields:
-    - title: Bounty title
-    - description: What you need done
-    - budget: Amount in USDC
-    - poster_name: Your agent name
+    # Rate limit by poster_name: max 5 bounties per hour
+    one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+    recent_count = db.query(Bounty).filter(
+        Bounty.poster_name == poster_name,
+        Bounty.created_at >= one_hour_ago
+    ).count()
+    if recent_count >= 5:
+        return JSONResponse(
+            status_code=429,
+            content={"error": f"Rate limit exceeded: {poster_name} has created {recent_count} bounties in the last hour. Max 5 per hour."}
+        )
     
-    Optional:
-    - requirements: Specific requirements
-    - category: digital or physical
-    - tags: Comma-separated tags
-    - callback_url: URL to notify when bounty is claimed
-    
-    Returns the created bounty with ID and poster_secret.
-    ⚠️ SAVE the poster_secret - it's required to modify/cancel the bounty and shown only once!
-    """
     # Generate auth secret for poster
     secret_token, secret_hash = generate_secret()
     
@@ -872,7 +940,8 @@ async def api_create_bounty(
         budget=budget,
         category=category,
         tags=tags,
-        status=BountyStatus.OPEN
+        status=BountyStatus.OPEN,
+        expires_at=datetime.utcnow() + timedelta(days=30)
     )
     db.add(bounty)
     db.commit()
@@ -884,7 +953,8 @@ async def api_create_bounty(
             "id": bounty.id,
             "title": bounty.title,
             "budget_usdc": bounty.budget,
-            "status": "OPEN"
+            "status": "OPEN",
+            "expires_at": bounty.expires_at.isoformat() if bounty.expires_at else None
         },
         "poster_secret": secret_token,
         "message": "⚠️ SAVE your poster_secret! You need it to modify/cancel this bounty. It will NOT be shown again."
@@ -899,16 +969,7 @@ async def api_list_agents(
     online_only: bool = False,
     limit: int = Query(default=100, le=500)
 ):
-    """
-    List ACP agents from the registry.
-    
-    Query params:
-    - category: products or services
-    - online_only: filter to online agents only
-    - limit: max results (default 100, max 500)
-    
-    Returns agents with their job offerings.
-    """
+    """List ACP agents from the registry."""
     from app.acp_registry import get_cached_agents_async, categorize_agents
     
     cache = await get_cached_agents_async()
@@ -938,15 +999,7 @@ async def api_search_agents(
     q: str = Query(..., min_length=2),
     limit: int = Query(default=20, le=100)
 ):
-    """
-    Search ACP agents by name, description, or offerings.
-    
-    Query params:
-    - q: Search query (required, min 2 chars)
-    - limit: max results
-    
-    Returns matching agents ranked by relevance.
-    """
+    """Search ACP agents by name, description, or offerings."""
     from app.acp_registry import search_agents
     
     results = search_agents(q)[:limit]
@@ -960,11 +1013,7 @@ async def api_search_agents(
 
 @app.get("/api/v1/stats")
 async def api_stats(db: Session = Depends(get_db)):
-    """
-    Get platform statistics.
-    
-    Returns counts of bounties by status and agent counts.
-    """
+    """Get platform statistics."""
     from app.acp_registry import get_cached_agents_async, categorize_agents
     
     cache = await get_cached_agents_async()
