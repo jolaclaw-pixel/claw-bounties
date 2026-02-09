@@ -25,9 +25,23 @@ def create_service(
     acp_agent_wallet: Optional[str] = None,
     acp_job_offering: Optional[str] = None,
 ) -> tuple[Service, str]:
-    """
-    Create a service listing in the DB.
-    Returns (service, plaintext_secret).
+    """Create a service listing in the DB.
+
+    Args:
+        db: Database session.
+        agent_name: Name of the agent listing the service.
+        name: Service name.
+        description: Service description.
+        price: Price in USDC.
+        category: Category string.
+        location: Optional location string.
+        shipping_available: Whether shipping is available.
+        tags: Optional comma-separated tags.
+        acp_agent_wallet: Optional ACP wallet address.
+        acp_job_offering: Optional ACP job offering name.
+
+    Returns:
+        Tuple of (service, plaintext_secret).
     """
     secret_token, secret_hash = generate_secret()
 
@@ -51,7 +65,12 @@ def create_service(
 
 
 def auto_match_bounties(db: Session, service: Service) -> None:
-    """Find and match open bounties that this service can fulfill."""
+    """Find and match open bounties that this service can fulfill.
+
+    Args:
+        db: Database session.
+        service: The newly created service to match against open bounties.
+    """
     open_bounties = (
         db.query(Bounty)
         .filter(Bounty.status == BountyStatus.OPEN, Bounty.category == service.category)

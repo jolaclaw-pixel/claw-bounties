@@ -1,45 +1,92 @@
 """Claw Bounties — application setup, middleware, lifespan, and router mounting."""
+import asyncio
+import json
+import logging
 import os
+import sys
 import time
 import uuid
-import asyncio
-import logging
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, Request, Depends
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, PlainTextResponse, Response, FileResponse, RedirectResponse
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from sqlalchemy import text
 from dotenv import load_dotenv  # noqa: F401
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
-from app.database import get_db, init_db, SessionLocal
-from app.models import Bounty, BountyStatus
-from app.routers import bounties, services
+from app.constants import (
+    ALLOWED_ORIGINS,
+    APP_VERSION,
+    CSRF_PROTECTED_PATHS,
+    ERR_CSRF_FAILED,
+    ERR_INTERNAL,
+    HONEYPOT_PATHS,
+)
+from app.database import init_db
+from app.routers import bounties, misc, services
 from app.routers.api_v1 import router as api_v1_router
-from app.routers.web import router as web_router, templates, get_agent_count
+from app.routers.web import router as web_router, templates
 
 load_dotenv()
 
-# ---- Structured logging ----
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# ---- Structured JSON logging ----
+
+
+class JSONFormatter(logging.Formatter):
+    """JSON log formatter for structured logging in production."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format a log record as a JSON string."""
+        log_entry: dict[str, Any] = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if hasattr(record, "request_id"):
+            log_entry["request_id"] = record.request_id
+        if record.exc_info and record.exc_info[1]:
+            log_entry["exception"] = str(record.exc_info[1])
+        return json.dumps(log_entry)
+
+
+def _configure_logging() -> None:
+    """Configure logging — JSON in production, plain in dev."""
+    log_format = os.getenv("LOG_FORMAT", "json" if os.getenv("RAILWAY_ENVIRONMENT") else "text")
+    handler = logging.StreamHandler(sys.stdout)
+
+    if log_format == "json":
+        handler.setFormatter(JSONFormatter(datefmt="%Y-%m-%dT%H:%M:%S"))
+    else:
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        )
+
+    logging.root.handlers = [handler]
+    logging.root.setLevel(logging.INFO)
+
+
+_configure_logging()
 logger = logging.getLogger(__name__)
+
 
 # ---- Rate limiter ----
 
 
 def get_real_ip(request: Request) -> str:
-    """Extract the real client IP from X-Forwarded-For or fall back to remote address."""
+    """Extract the real client IP from X-Forwarded-For or fall back to remote address.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        Client IP string.
+    """
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         return forwarded.split(",")[0].strip()
@@ -48,106 +95,20 @@ def get_real_ip(request: Request) -> str:
 
 limiter = Limiter(key_func=get_real_ip)
 
-# ---- Sitemap cache ----
-_sitemap_cache: str | None = None
-
-
-async def _build_sitemap() -> str:
-    """Build sitemap XML from DB + ACP cache."""
-    from app.acp_registry import get_cached_agents_async
-
-    db = SessionLocal()
-    try:
-        urls = [
-            "https://clawbounty.io/",
-            "https://clawbounty.io/bounties",
-            "https://clawbounty.io/registry",
-            "https://clawbounty.io/post-bounty",
-            "https://clawbounty.io/success-stories",
-        ]
-        for b in db.query(Bounty.id).yield_per(100):
-            urls.append(f"https://clawbounty.io/bounties/{b.id}")
-    finally:
-        db.close()
-
-    cache = await get_cached_agents_async()
-    for a in cache.get("agents", []):
-        if a.get("id"):
-            urls.append(f"https://clawbounty.io/agents/{a['id']}")
-
-    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-    for url in urls:
-        xml += f"  <url><loc>{url}</loc></url>\n"
-    xml += "</urlset>"
-    return xml
-
-
-# ---- Supervised background tasks ----
-
-
-async def supervised_task(name: str, coro_fn: Any, *args: Any) -> None:
-    """Run a coroutine forever, restarting on crash with a 30-second delay."""
-    while True:
-        try:
-            await coro_fn(*args)
-        except Exception as e:
-            logger.error(f"Task {name} crashed: {e}, restarting in 30s...")
-            await asyncio.sleep(30)
-
-
-async def expire_bounties_task() -> None:
-    """Background task to auto-cancel expired bounties every hour."""
-    while True:
-        await asyncio.sleep(3600)
-        db = None
-        try:
-            db = SessionLocal()
-            now = datetime.utcnow()
-            expired = (
-                db.query(Bounty)
-                .filter(
-                    Bounty.status.in_([BountyStatus.OPEN, BountyStatus.CLAIMED]),
-                    Bounty.expires_at.isnot(None),
-                    Bounty.expires_at <= now,
-                )
-                .all()
-            )
-            for bounty in expired:
-                bounty.status = BountyStatus.CANCELLED
-                logger.info(f"Auto-cancelled expired bounty #{bounty.id}: {bounty.title}")
-            if expired:
-                db.commit()
-                logger.info(f"Expired {len(expired)} bounties")
-        except Exception as e:
-            logger.error(f"Bounty expiration task failed: {e}")
-        finally:
-            if db:
-                db.close()
-
-
-async def periodic_registry_refresh() -> None:
-    """Background task to refresh ACP registry every 5 minutes and rebuild sitemap."""
-    global _sitemap_cache
-    from app.acp_registry import refresh_cache
-
-    while True:
-        await asyncio.sleep(300)
-        try:
-            logger.info("Periodic ACP registry refresh starting...")
-            await refresh_cache()
-            _sitemap_cache = await _build_sitemap()
-            logger.info("Periodic ACP registry refresh complete")
-        except Exception as e:
-            logger.error(f"Periodic refresh failed: {e}")
-
 
 # ---- Lifespan ----
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan: init DB, start background tasks."""
-    global _sitemap_cache
+async def lifespan(app: FastAPI):  # type: ignore[arg-type]
+    """Application lifespan: init DB, start background tasks.
+
+    Args:
+        app: The FastAPI application.
+    """
+    from app.routers.misc import build_sitemap, set_sitemap_cache
+    from app.tasks import expire_bounties_task, periodic_registry_refresh, supervised_task
+
     init_db()
 
     from app.acp_registry import refresh_cache
@@ -157,7 +118,8 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(supervised_task("expire_bounties", expire_bounties_task))
 
     try:
-        _sitemap_cache = await _build_sitemap()
+        sitemap = await build_sitemap()
+        set_sitemap_cache(sitemap)
     except Exception:
         pass
 
@@ -168,22 +130,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Claw Bounties",
-    description="A bounty marketplace for Claw Agents",
-    version="0.4.0",
+    description="A bounty marketplace for Claw Agents — post, claim, and fulfill bounties using ACP.",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
-# ---- Middleware ----
+# ---- Middleware (order matters — outermost first) ----
 
-HONEYPOT_PATHS = {
-    "/wp-login.php", "/wp-admin", "/admin", "/index.php",
-    "/.env", "/xmlrpc.php", "/wp-content",
-}
+# GZip compression
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 @app.middleware("http")
-async def block_scanners(request: Request, call_next):
-    """Return 404 for common scanner/bot paths."""
+async def block_scanners(request: Request, call_next: Any) -> Any:
+    """Return 404 for common scanner/bot paths.
+
+    Args:
+        request: The incoming request.
+        call_next: Next middleware callable.
+
+    Returns:
+        JSONResponse 404 or the downstream response.
+    """
     if request.url.path in HONEYPOT_PATHS:
         return JSONResponse(status_code=404, content={"detail": "Not found"})
     return await call_next(request)
@@ -204,67 +172,100 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.middleware("http")
-async def add_security_headers(request: Request, call_next):
-    """Add security headers to all responses."""
+async def add_security_headers(request: Request, call_next: Any) -> Any:
+    """Add security headers including CSP to all responses.
+
+    Args:
+        request: The incoming request.
+        call_next: Next middleware callable.
+
+    Returns:
+        Response with security headers.
+    """
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self' https://acpx.virtuals.io; "
+        "frame-ancestors 'none'"
+    )
     return response
 
 
 @app.middleware("http")
-async def request_logging(request: Request, call_next):
-    """Log method, path, status, and duration for every request."""
+async def add_request_id(request: Request, call_next: Any) -> Any:
+    """Attach a unique request ID to every request and response.
+
+    Args:
+        request: The incoming request.
+        call_next: Next middleware callable.
+
+    Returns:
+        Response with X-Request-ID header.
+    """
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.middleware("http")
+async def request_logging(request: Request, call_next: Any) -> Any:
+    """Log method, path, status, and duration for every request.
+
+    Args:
+        request: The incoming request.
+        call_next: Next middleware callable.
+
+    Returns:
+        The downstream response.
+    """
     start = time.perf_counter()
     response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
-    logger.info(f"{request.method} {request.url.path} {response.status_code} {duration_ms:.1f}ms")
+    request_id = getattr(request.state, "request_id", "")
+    logger.info(f"[{request_id}] {request.method} {request.url.path} {response.status_code} {duration_ms:.1f}ms")
     return response
 
 
-# Web form POST endpoints that need CSRF protection
-_CSRF_PROTECTED_PATHS = {
-    "/post-bounty", "/list-service",
-}
-
-
 @app.middleware("http")
-async def csrf_protection(request: Request, call_next):
-    """Check Origin/Referer on POST requests to web form endpoints for CSRF protection."""
+async def csrf_protection(request: Request, call_next: Any) -> Any:
+    """Check Origin/Referer on POST requests to web form endpoints for CSRF protection.
+
+    Args:
+        request: The incoming request.
+        call_next: Next middleware callable.
+
+    Returns:
+        403 JSONResponse if CSRF check fails, otherwise downstream response.
+    """
     if request.method == "POST":
         path = request.url.path
-        # Protect web form endpoints (not /api/ which are for programmatic access)
-        is_web_form = path in _CSRF_PROTECTED_PATHS or (
+        is_web_form = path in CSRF_PROTECTED_PATHS or (
             path.startswith("/bounties/") and (path.endswith("/claim") or path.endswith("/fulfill"))
         )
         if is_web_form:
             origin = request.headers.get("origin")
             referer = request.headers.get("referer")
-            allowed_origins = {
-                "https://clawbounty.io",
-                "http://localhost:8000",
-                "http://127.0.0.1:8000",
-            }
-            # Allow if Origin or Referer matches
-            origin_ok = origin in allowed_origins if origin else False
-            referer_ok = any(referer and referer.startswith(o) for o in allowed_origins) if referer else False
+            origin_ok = origin in ALLOWED_ORIGINS if origin else False
+            referer_ok = any(referer and referer.startswith(o) for o in ALLOWED_ORIGINS) if referer else False
             if not origin_ok and not referer_ok:
-                # If neither header present (e.g. same-origin without headers), allow
                 if origin or referer:
-                    return JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+                    request_id = getattr(request.state, "request_id", "")
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "CSRF validation failed", "code": ERR_CSRF_FAILED, "request_id": request_id},
+                    )
     return await call_next(request)
-
-
-@app.middleware("http")
-async def add_request_id(request: Request, call_next):
-    """Attach a unique request ID to every response."""
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    return response
 
 
 # ---- Include routers ----
@@ -272,154 +273,65 @@ async def add_request_id(request: Request, call_next):
 app.include_router(api_v1_router)
 app.include_router(bounties.router)
 app.include_router(services.router)
+app.include_router(misc.router)
 app.include_router(web_router)
 
 # ---- Backward compat redirects ----
 
-from fastapi import APIRouter as _AR
-
-_compat_router = _AR(tags=["compat"])
+_compat_router = APIRouter(tags=["compat"])
 
 
-@_compat_router.api_route("/api/bounties/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@_compat_router.api_route(
+    "/api/bounties/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    summary="[Deprecated] Redirect to /api/v1/bounties/",
+    deprecated=True,
+)
 async def compat_bounties(request: Request, path: str) -> Any:
-    """Redirect old /api/bounties/ paths to /api/v1/bounties/."""
+    """Redirect old /api/bounties/ paths to /api/v1/bounties/.
+
+    Args:
+        request: The incoming request.
+        path: The sub-path.
+
+    Returns:
+        307 RedirectResponse with Deprecation header.
+    """
     new_url = f"/api/v1/bounties/{path}"
     if request.url.query:
         new_url += f"?{request.url.query}"
-    return RedirectResponse(url=new_url, status_code=307)
+    response = RedirectResponse(url=new_url, status_code=307)
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "2026-06-01"
+    return response
 
 
-@_compat_router.api_route("/api/services/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@_compat_router.api_route(
+    "/api/services/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    summary="[Deprecated] Redirect to /api/v1/services/",
+    deprecated=True,
+)
 async def compat_services(request: Request, path: str) -> Any:
-    """Redirect old /api/services/ paths to /api/v1/services/."""
+    """Redirect old /api/services/ paths to /api/v1/services/.
+
+    Args:
+        request: The incoming request.
+        path: The sub-path.
+
+    Returns:
+        307 RedirectResponse with Deprecation header.
+    """
     new_url = f"/api/v1/services/{path}"
     if request.url.query:
         new_url += f"?{request.url.query}"
-    return RedirectResponse(url=new_url, status_code=307)
+    response = RedirectResponse(url=new_url, status_code=307)
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "2026-06-01"
+    return response
 
 
 app.include_router(_compat_router)
-
-
-# ---- Misc endpoints ----
-
-
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
-    """Serve the favicon."""
-    favicon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "favicon.ico")
-    if os.path.exists(favicon_path):
-        return FileResponse(favicon_path, media_type="image/x-icon")
-    return Response(status_code=204)
-
-
-@app.get("/health")
-async def health(db: Session = Depends(get_db)) -> dict[str, str]:
-    """Health check endpoint — verifies DB connectivity."""
-    try:
-        db.execute(text("SELECT 1"))
-        db_status = "connected"
-    except Exception:
-        db_status = "disconnected"
-    return {"status": "healthy" if db_status == "connected" else "degraded", "database": db_status}
-
-
-@app.get("/robots.txt")
-async def robots_txt() -> PlainTextResponse:
-    """Serve robots.txt for search engine crawlers."""
-    return PlainTextResponse(
-        "User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: https://clawbounty.io/sitemap.xml\n"
-    )
-
-
-@app.get("/sitemap.xml")
-async def sitemap_xml() -> Response:
-    """Serve the auto-generated sitemap."""
-    global _sitemap_cache
-    if _sitemap_cache is None:
-        _sitemap_cache = await _build_sitemap()
-    return Response(content=_sitemap_cache, media_type="application/xml")
-
-
-@app.get("/api/registry")
-async def get_registry() -> dict[str, Any]:
-    """Get the ACP agent registry, categorized into products and services."""
-    from app.acp_registry import get_cached_agents_async, categorize_agents
-
-    cache = await get_cached_agents_async()
-    agents = cache.get("agents", [])
-    categorized = categorize_agents(agents)
-    return {
-        "products": categorized["products"],
-        "services": categorized["services"],
-        "total_agents": len(agents),
-        "last_updated": cache.get("last_updated"),
-    }
-
-
-@app.post("/api/registry/refresh")
-@limiter.limit("2/minute")
-async def refresh_registry(request: Request) -> dict[str, Any]:
-    """Force-refresh the ACP agent registry cache (rate-limited)."""
-    from app.acp_registry import refresh_cache
-
-    cache = await refresh_cache()
-    return {
-        "status": "refreshed",
-        "agents_count": len(cache.get("agents", [])),
-        "last_updated": cache.get("last_updated"),
-    }
-
-
-@app.get("/api/skill")
-async def get_skill_manifest() -> dict[str, Any]:
-    """Return the machine-readable skill manifest for agent discovery."""
-    agent_count = get_agent_count()
-    return {
-        "name": "claw-bounties",
-        "version": "1.2.0",
-        "description": f"Browse, post, and claim bounties on the Claw Bounties marketplace. ~{agent_count:,} Virtuals Protocol ACP agents. Auth required for modifications.",
-        "author": "ClawBounty",
-        "base_url": "https://clawbounty.io",
-        "authentication": {
-            "type": "secret_token",
-            "description": "Creating bounties/services returns a secret token. Save it! Required to modify/cancel.",
-            "bounty_secret": "poster_secret - returned on bounty creation, needed for cancel/fulfill",
-            "service_secret": "agent_secret - returned on service creation, needed for update/delete",
-        },
-        "endpoints": {
-            "list_open_bounties": {"method": "GET", "path": "/api/v1/bounties/open", "params": ["category", "min_budget", "max_budget", "limit"], "description": "List all OPEN bounties available for claiming", "auth": "none"},
-            "list_bounties": {"method": "GET", "path": "/api/v1/bounties", "params": ["status", "category", "limit"], "description": "List bounties with filters (OPEN/MATCHED/FULFILLED)", "auth": "none"},
-            "get_bounty": {"method": "GET", "path": "/api/v1/bounties/{id}", "description": "Get bounty details by ID", "auth": "none"},
-            "post_bounty": {"method": "POST", "path": "/api/v1/bounties", "body": ["title", "description", "budget", "poster_name", "category", "tags", "requirements", "callback_url"], "description": "Post a new bounty (USDC). Returns poster_secret - SAVE IT!", "auth": "none", "returns": "poster_secret (save for modifications)"},
-            "cancel_bounty": {"method": "POST", "path": "/api/v1/bounties/{id}/cancel", "body": ["poster_secret"], "description": "Cancel your bounty", "auth": "poster_secret"},
-            "fulfill_bounty": {"method": "POST", "path": "/api/v1/bounties/{id}/fulfill", "body": ["poster_secret", "acp_job_id"], "description": "Mark bounty as fulfilled", "auth": "poster_secret"},
-            "search_agents": {"method": "GET", "path": "/api/v1/agents/search", "params": ["q", "limit"], "description": "Search ACP agents by name/description/offerings", "auth": "none"},
-            "list_agents": {"method": "GET", "path": "/api/v1/agents", "params": ["category", "online_only", "limit"], "description": f"List all ACP agents (~{agent_count:,})", "auth": "none"},
-            "stats": {"method": "GET", "path": "/api/v1/stats", "description": "Get platform statistics", "auth": "none"},
-        },
-        "examples": {
-            "find_work": "curl https://clawbounty.io/api/v1/bounties/open",
-            "search_agents": "curl 'https://clawbounty.io/api/v1/agents/search?q=trading'",
-            "post_bounty": 'curl -X POST https://clawbounty.io/api/v1/bounties -H "Content-Type: application/json" -d \'{"title":"Need logo","description":"Design a logo for my project","budget":50,"poster_name":"MyAgent"}\'',
-            "cancel_bounty": 'curl -X POST https://clawbounty.io/api/v1/bounties/123/cancel -H "Content-Type: application/json" -d \'{"poster_secret": "your_token"}\'',
-        },
-    }
-
-
-@app.get("/api/skill.json")
-async def get_skill_json() -> dict[str, Any]:
-    """Return skill manifest as JSON (alias)."""
-    return await get_skill_manifest()
-
-
-@app.get("/skill.md")
-async def get_skill_md() -> PlainTextResponse:
-    """Return the SKILL.md markdown file."""
-    skill_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "SKILL.md")
-    with open(skill_path, "r") as f:
-        return PlainTextResponse(f.read(), media_type="text/markdown")
 
 
 # ---- Error handlers ----
@@ -427,8 +339,22 @@ async def get_skill_md() -> PlainTextResponse:
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception) -> Any:
-    """Catch-all error handler: JSON for API routes, HTML for web routes."""
-    logger.error(f"Unhandled exception on {request.url.path}: {exc}")
+    """Catch-all error handler: JSON for API routes, HTML for web routes.
+
+    Args:
+        request: The incoming request.
+        exc: The unhandled exception.
+
+    Returns:
+        JSONResponse for API routes, TemplateResponse for web routes.
+    """
+    request_id = getattr(request.state, "request_id", "")
+    logger.error(f"[{request_id}] Unhandled exception on {request.url.path}: {exc}")
     if request.url.path.startswith("/api/"):
-        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
-    return templates.TemplateResponse("error.html", {"request": request, "error": "An internal error occurred"}, status_code=500)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "code": ERR_INTERNAL, "request_id": request_id},
+        )
+    return templates.TemplateResponse(
+        "error.html", {"request": request, "error": "An internal error occurred"}, status_code=500
+    )

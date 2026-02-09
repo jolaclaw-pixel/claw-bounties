@@ -1,28 +1,45 @@
 """API routes for bounty CRUD operations."""
+import hashlib
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import desc
+from sqlalchemy.orm import Session
 
+from app.constants import (
+    DEFAULT_PAGE_SIZE,
+    ERR_BOUNTY_NOT_FOUND,
+    ERR_INVALID_CALLBACK_URL,
+    ERR_INVALID_SECRET,
+    ERR_INVALID_STATUS,
+    MAX_PAGE_SIZE,
+)
 from app.database import get_db
 from app.models import Bounty, BountyStatus, verify_secret
 from app.schemas import (
-    BountyCreate, BountyResponse, BountyList,
-    BountyClaim, BountyClaimResponse, BountyMatch, BountyUnclaim,
-    BountyFulfill, BountyCancel, BountyPostResponse,
     ACPSearchResult,
+    BountyCancel,
+    BountyClaim,
+    BountyClaimResponse,
+    BountyCreate,
+    BountyFulfill,
+    BountyMatch,
+    BountyPostResponse,
+    BountyResponse,
+    BountyUnclaim,
+    EnvelopedBountyList,
+    PaginationMeta,
 )
 from app.services.bounty_service import (
+    cancel_bounty as svc_cancel_bounty,
+    claim_bounty as svc_claim_bounty,
+    create_bounty as svc_create_bounty,
+    fulfill_bounty as svc_fulfill_bounty,
+    get_bounty_by_id,
     search_acp_registry,
     send_bounty_webhook,
-    get_bounty_by_id,
-    create_bounty as svc_create_bounty,
-    claim_bounty as svc_claim_bounty,
-    fulfill_bounty as svc_fulfill_bounty,
-    cancel_bounty as svc_cancel_bounty,
 )
 from app.utils import validate_callback_url
 
@@ -30,15 +47,45 @@ router = APIRouter(prefix="/api/v1/bounties", tags=["bounties"])
 logger = logging.getLogger(__name__)
 
 
-@router.post("/", response_model=BountyPostResponse)
-async def create_bounty(bounty: BountyCreate, db: Session = Depends(get_db)):
+def _error(status: int, detail: str, code: str, request: Request) -> HTTPException:
+    """Create a structured HTTPException with error code and request ID.
+
+    Args:
+        status: HTTP status code.
+        detail: Human-readable error message.
+        code: Machine-readable error code.
+        request: The incoming request (for request_id).
+
+    Returns:
+        HTTPException with structured detail.
     """
-    Create a new bounty.
-    First checks ACP registry — if matching service exists, returns that instead.
-    Returns a poster_secret token — SAVE THIS! Required to modify/cancel the bounty.
+    request_id = getattr(request.state, "request_id", "")
+    raise HTTPException(
+        status_code=status,
+        detail={"detail": detail, "code": code, "request_id": request_id},
+    )
+
+
+@router.post(
+    "/",
+    response_model=BountyPostResponse,
+    summary="Create a new bounty",
+    description="Create a new bounty. First checks ACP registry for existing matches. Returns a poster_secret token — SAVE THIS!",
+    response_description="Bounty creation result with optional ACP match.",
+)
+async def create_bounty(bounty: BountyCreate, request: Request, db: Session = Depends(get_db)) -> BountyPostResponse:
+    """Create a new bounty, checking ACP first.
+
+    Args:
+        bounty: Bounty creation data.
+        request: The incoming request.
+        db: Database session.
+
+    Returns:
+        BountyPostResponse with the created bounty or ACP match.
     """
     if bounty.poster_callback_url and not validate_callback_url(bounty.poster_callback_url):
-        raise HTTPException(status_code=400, detail="Invalid callback URL: private/internal addresses are not allowed")
+        _error(400, "Invalid callback URL: private/internal addresses are not allowed", ERR_INVALID_CALLBACK_URL, request)
 
     search_query = f"{bounty.title} {bounty.tags or ''}"
     acp_result = await search_acp_registry(search_query)
@@ -49,7 +96,7 @@ async def create_bounty(bounty: BountyCreate, db: Session = Depends(get_db)):
             poster_secret=None,
             acp_match=acp_result,
             action="acp_available",
-            message=f"Service already available on ACP! Found {len(acp_result.agents)} matching agent(s). Use ACP to fulfill your request directly.",
+            message=f"Service already available on ACP! Found {len(acp_result.agents)} matching agent(s).",
         )
 
     db_bounty, secret_token = svc_create_bounty(
@@ -70,22 +117,44 @@ async def create_bounty(bounty: BountyCreate, db: Session = Depends(get_db)):
         poster_secret=secret_token,
         acp_match=acp_result,
         action="posted",
-        message="Bounty posted! SAVE YOUR poster_secret — you need it to modify/cancel this bounty. No matching service found on ACP yet.",
+        message="Bounty posted! SAVE YOUR poster_secret — you need it to modify/cancel this bounty.",
     )
 
 
-@router.get("/", response_model=BountyList)
+@router.get(
+    "/",
+    response_model=EnvelopedBountyList,
+    summary="List bounties",
+    description="List bounties with optional filters. Returns paginated results.",
+    response_description="Paginated list of bounties.",
+)
 def list_bounties(
+    request: Request,
     status: Optional[str] = None,
     category: Optional[str] = None,
     min_budget: Optional[float] = None,
     max_budget: Optional[float] = None,
     search: Optional[str] = None,
-    limit: int = Query(default=50, le=100),
+    limit: int = Query(default=DEFAULT_PAGE_SIZE, le=MAX_PAGE_SIZE),
     offset: int = 0,
     db: Session = Depends(get_db),
-):
-    """List bounties with optional filters."""
+) -> dict[str, Any]:
+    """List bounties with optional filters.
+
+    Args:
+        request: The incoming request.
+        status: Filter by bounty status.
+        category: Filter by category.
+        min_budget: Minimum budget filter.
+        max_budget: Maximum budget filter.
+        search: Search term for title/description/tags.
+        limit: Max results per page.
+        offset: Offset for pagination.
+        db: Database session.
+
+    Returns:
+        Enveloped bounty list with pagination metadata.
+    """
     query = db.query(Bounty)
     if status:
         query = query.filter(Bounty.status == status)
@@ -105,18 +174,44 @@ def list_bounties(
 
     total = query.count()
     bounties = query.order_by(desc(Bounty.created_at)).offset(offset).limit(limit).all()
-    return BountyList(bounties=bounties, total=total)
+    page = (offset // limit) + 1 if limit > 0 else 1
+    bounty_responses = [BountyResponse.model_validate(b) for b in bounties]
+
+    return {
+        "data": bounty_responses,
+        "meta": PaginationMeta(total=total, page=page, per_page=limit),
+        "bounties": bounty_responses,
+        "total": total,
+    }
 
 
-@router.get("/open")
+@router.get(
+    "/open",
+    summary="List open bounties",
+    description="List OPEN bounties available for claiming.",
+    response_description="List of open bounties with count.",
+)
 def list_open_bounties(
+    request: Request,
     category: Optional[str] = None,
     min_budget: Optional[float] = None,
     max_budget: Optional[float] = None,
-    limit: int = Query(default=50, le=100),
+    limit: int = Query(default=DEFAULT_PAGE_SIZE, le=MAX_PAGE_SIZE),
     db: Session = Depends(get_db),
-):
-    """List OPEN bounties available for claiming."""
+) -> dict[str, Any]:
+    """List OPEN bounties available for claiming.
+
+    Args:
+        request: The incoming request.
+        category: Filter by category.
+        min_budget: Minimum budget.
+        max_budget: Maximum budget.
+        limit: Max results.
+        db: Database session.
+
+    Returns:
+        Dict with open_bounties list and count.
+    """
     query = db.query(Bounty).filter(Bounty.status == BountyStatus.OPEN)
     if category:
         query = query.filter(Bounty.category == category)
@@ -147,44 +242,87 @@ def list_open_bounties(
     }
 
 
-@router.get("/{bounty_id}", response_model=BountyResponse)
-def get_bounty(bounty_id: int, db: Session = Depends(get_db)):
-    """Get a specific bounty by ID."""
+@router.get(
+    "/{bounty_id}",
+    response_model=BountyResponse,
+    summary="Get bounty by ID",
+    description="Get a specific bounty by its ID. Includes ETag for caching.",
+    response_description="Bounty details.",
+)
+def get_bounty(bounty_id: int, request: Request, db: Session = Depends(get_db)) -> Any:
+    """Get a specific bounty by ID with ETag support.
+
+    Args:
+        bounty_id: The bounty ID.
+        request: The incoming request.
+        db: Database session.
+
+    Returns:
+        BountyResponse (via JSONResponse with ETag header).
+    """
     bounty = get_bounty_by_id(db, bounty_id)
     if not bounty:
-        raise HTTPException(status_code=404, detail="Bounty not found")
-    return bounty
+        _error(404, "Bounty not found", ERR_BOUNTY_NOT_FOUND, request)
+
+    response_data = BountyResponse.model_validate(bounty)
+    # ETag based on status + updated_at
+    etag_source = f"{bounty.id}-{bounty.status}-{bounty.updated_at or bounty.created_at}"
+    etag = hashlib.md5(etag_source.encode()).hexdigest()
+
+    # Check If-None-Match
+    if_none_match = request.headers.get("If-None-Match")
+    if if_none_match and if_none_match.strip('"') == etag:
+        from fastapi.responses import Response
+        return Response(status_code=304, headers={"ETag": f'"{etag}"'})
+
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content=response_data.model_dump(mode="json"),
+        headers={"ETag": f'"{etag}"'},
+    )
 
 
-@router.post("/{bounty_id}/claim", response_model=BountyClaimResponse)
+@router.post(
+    "/{bounty_id}/claim",
+    response_model=BountyClaimResponse,
+    summary="Claim a bounty",
+    description="Claim a bounty as an agent willing to fulfill it. Returns a claimer_secret — SAVE THIS!",
+    response_description="Claim confirmation with claimer_secret.",
+)
 async def claim_bounty(
     bounty_id: int,
     claim: BountyClaim,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-):
-    """
-    Claim a bounty as an agent willing to fulfill it.
-    Returns a claimer_secret token — SAVE THIS!
+) -> BountyClaimResponse:
+    """Claim a bounty.
+
+    Args:
+        bounty_id: The bounty ID.
+        claim: Claim data.
+        request: The incoming request.
+        background_tasks: Background task runner.
+        db: Database session.
+
+    Returns:
+        BountyClaimResponse with the claimer_secret.
     """
     if claim.claimer_callback_url and not validate_callback_url(claim.claimer_callback_url):
-        raise HTTPException(status_code=400, detail="Invalid callback URL: private/internal addresses are not allowed")
+        _error(400, "Invalid callback URL: private/internal addresses are not allowed", ERR_INVALID_CALLBACK_URL, request)
 
     bounty = get_bounty_by_id(db, bounty_id)
     if not bounty:
-        raise HTTPException(status_code=404, detail="Bounty not found")
+        _error(404, "Bounty not found", ERR_BOUNTY_NOT_FOUND, request)
     if bounty.status != BountyStatus.OPEN:
-        raise HTTPException(status_code=400, detail="Bounty is not available for claiming")
+        _error(400, "Bounty is not available for claiming", ERR_INVALID_STATUS, request)
 
     secret_token = svc_claim_bounty(db, bounty, claim.claimer_name, claim.claimer_callback_url)
 
     if bounty.poster_callback_url:
         bounty_data = {
-            "id": bounty.id,
-            "title": bounty.title,
-            "budget_usdc": bounty.budget,
-            "claimed_by": claim.claimer_name,
-            "status": "CLAIMED",
+            "id": bounty.id, "title": bounty.title,
+            "budget_usdc": bounty.budget, "claimed_by": claim.claimer_name, "status": "CLAIMED",
         }
         background_tasks.add_task(send_bounty_webhook, bounty.poster_callback_url, "bounty.claimed", bounty_data)
 
@@ -192,25 +330,43 @@ async def claim_bounty(
         bounty_id=bounty.id,
         claimed_by=claim.claimer_name,
         claimer_secret=secret_token,
-        message=f"Bounty claimed! SAVE YOUR claimer_secret — you need it to unclaim. Poster {'will be' if bounty.poster_callback_url else 'was NOT'} notified.",
+        message="Bounty claimed! SAVE YOUR claimer_secret — you need it to unclaim.",
     )
 
 
-@router.post("/{bounty_id}/unclaim", response_model=BountyResponse)
+@router.post(
+    "/{bounty_id}/unclaim",
+    response_model=BountyResponse,
+    summary="Unclaim a bounty",
+    description="Release a claim on a bounty back to OPEN status. Requires claimer_secret.",
+    response_description="Updated bounty with OPEN status.",
+)
 async def unclaim_bounty(
     bounty_id: int,
     unclaim: BountyUnclaim,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-):
-    """Unclaim a bounty (release claim back to OPEN status). Requires claimer_secret."""
+) -> Bounty:
+    """Unclaim a bounty.
+
+    Args:
+        bounty_id: The bounty ID.
+        unclaim: Unclaim data with claimer_secret.
+        request: The incoming request.
+        background_tasks: Background task runner.
+        db: Database session.
+
+    Returns:
+        The updated bounty.
+    """
     bounty = get_bounty_by_id(db, bounty_id)
     if not bounty:
-        raise HTTPException(status_code=404, detail="Bounty not found")
+        _error(404, "Bounty not found", ERR_BOUNTY_NOT_FOUND, request)
     if not verify_secret(unclaim.claimer_secret, bounty.claimer_secret_hash):
-        raise HTTPException(status_code=403, detail="Invalid claimer_secret. Only the claimer can unclaim it.")
+        _error(403, "Invalid claimer_secret", ERR_INVALID_SECRET, request)
     if bounty.status != BountyStatus.CLAIMED:
-        raise HTTPException(status_code=400, detail="Bounty is not in CLAIMED status")
+        _error(400, "Bounty is not in CLAIMED status", ERR_INVALID_STATUS, request)
 
     bounty.status = BountyStatus.OPEN
     bounty.claimed_by = None
@@ -227,21 +383,39 @@ async def unclaim_bounty(
     return bounty
 
 
-@router.post("/{bounty_id}/match", response_model=BountyResponse)
+@router.post(
+    "/{bounty_id}/match",
+    response_model=BountyResponse,
+    summary="Match bounty to ACP service",
+    description="Match a bounty to an ACP service. Requires poster_secret.",
+    response_description="Updated bounty with MATCHED status.",
+)
 async def match_bounty(
     bounty_id: int,
     match: BountyMatch,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-):
-    """Match a bounty to an ACP service. Requires poster_secret."""
+) -> Bounty:
+    """Match a bounty to an ACP service.
+
+    Args:
+        bounty_id: The bounty ID.
+        match: Match data with poster_secret and ACP info.
+        request: The incoming request.
+        background_tasks: Background task runner.
+        db: Database session.
+
+    Returns:
+        The updated bounty.
+    """
     bounty = get_bounty_by_id(db, bounty_id)
     if not bounty:
-        raise HTTPException(status_code=404, detail="Bounty not found")
+        _error(404, "Bounty not found", ERR_BOUNTY_NOT_FOUND, request)
     if not verify_secret(match.poster_secret, bounty.poster_secret_hash):
-        raise HTTPException(status_code=403, detail="Invalid poster_secret. Only the bounty poster can match it to a service.")
+        _error(403, "Invalid poster_secret", ERR_INVALID_SECRET, request)
     if bounty.status not in [BountyStatus.OPEN, BountyStatus.CLAIMED]:
-        raise HTTPException(status_code=400, detail="Bounty is not available for matching")
+        _error(400, "Bounty is not available for matching", ERR_INVALID_STATUS, request)
 
     bounty.status = BountyStatus.MATCHED
     bounty.matched_service_id = match.service_id
@@ -253,42 +427,54 @@ async def match_bounty(
 
     if bounty.poster_callback_url:
         bounty_data = {
-            "id": bounty.id,
-            "title": bounty.title,
-            "budget_usdc": bounty.budget,
+            "id": bounty.id, "title": bounty.title, "budget_usdc": bounty.budget,
             "matched_acp_agent": bounty.matched_acp_agent,
-            "matched_acp_job": bounty.matched_acp_job,
-            "status": "MATCHED",
+            "matched_acp_job": bounty.matched_acp_job, "status": "MATCHED",
         }
         background_tasks.add_task(send_bounty_webhook, bounty.poster_callback_url, "bounty.matched", bounty_data)
 
     return bounty
 
 
-@router.post("/{bounty_id}/fulfill", response_model=BountyResponse)
+@router.post(
+    "/{bounty_id}/fulfill",
+    response_model=BountyResponse,
+    summary="Fulfill a bounty",
+    description="Mark bounty as fulfilled after ACP job completion. Requires poster_secret.",
+    response_description="Updated bounty with FULFILLED status.",
+)
 async def fulfill_bounty(
     bounty_id: int,
     fulfill: BountyFulfill,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-):
-    """Mark bounty as fulfilled after ACP job completion. Requires poster_secret."""
+) -> Bounty:
+    """Fulfill a bounty.
+
+    Args:
+        bounty_id: The bounty ID.
+        fulfill: Fulfillment data with poster_secret and acp_job_id.
+        request: The incoming request.
+        background_tasks: Background task runner.
+        db: Database session.
+
+    Returns:
+        The updated bounty.
+    """
     bounty = get_bounty_by_id(db, bounty_id)
     if not bounty:
-        raise HTTPException(status_code=404, detail="Bounty not found")
+        _error(404, "Bounty not found", ERR_BOUNTY_NOT_FOUND, request)
     if not verify_secret(fulfill.poster_secret, bounty.poster_secret_hash):
-        raise HTTPException(status_code=403, detail="Invalid poster_secret. Only the bounty poster can fulfill it.")
+        _error(403, "Invalid poster_secret", ERR_INVALID_SECRET, request)
     if bounty.status not in [BountyStatus.MATCHED, BountyStatus.CLAIMED]:
-        raise HTTPException(status_code=400, detail="Bounty must be claimed or matched before fulfilling")
+        _error(400, "Bounty must be claimed or matched before fulfilling", ERR_INVALID_STATUS, request)
 
     svc_fulfill_bounty(db, bounty, fulfill.acp_job_id)
 
     bounty_data = {
-        "id": bounty.id,
-        "title": bounty.title,
-        "budget_usdc": bounty.budget,
-        "status": "FULFILLED",
-        "acp_job_id": bounty.acp_job_id,
+        "id": bounty.id, "title": bounty.title,
+        "budget_usdc": bounty.budget, "status": "FULFILLED", "acp_job_id": bounty.acp_job_id,
     }
     if bounty.poster_callback_url:
         background_tasks.add_task(send_bounty_webhook, bounty.poster_callback_url, "bounty.fulfilled", bounty_data)
@@ -298,21 +484,50 @@ async def fulfill_bounty(
     return bounty
 
 
-@router.post("/{bounty_id}/cancel", response_model=BountyResponse)
-def cancel_bounty(bounty_id: int, cancel: BountyCancel, db: Session = Depends(get_db)):
-    """Cancel a bounty. Requires poster_secret."""
+@router.post(
+    "/{bounty_id}/cancel",
+    response_model=BountyResponse,
+    summary="Cancel a bounty",
+    description="Cancel a bounty. Requires poster_secret.",
+    response_description="Updated bounty with CANCELLED status.",
+)
+def cancel_bounty(bounty_id: int, cancel: BountyCancel, request: Request, db: Session = Depends(get_db)) -> Bounty:
+    """Cancel a bounty.
+
+    Args:
+        bounty_id: The bounty ID.
+        cancel: Cancel data with poster_secret.
+        request: The incoming request.
+        db: Database session.
+
+    Returns:
+        The updated bounty.
+    """
     bounty = get_bounty_by_id(db, bounty_id)
     if not bounty:
-        raise HTTPException(status_code=404, detail="Bounty not found")
+        _error(404, "Bounty not found", ERR_BOUNTY_NOT_FOUND, request)
     if not verify_secret(cancel.poster_secret, bounty.poster_secret_hash):
-        raise HTTPException(status_code=403, detail="Invalid poster_secret. Only the bounty poster can cancel it.")
+        _error(403, "Invalid poster_secret", ERR_INVALID_SECRET, request)
     if bounty.status == BountyStatus.FULFILLED:
-        raise HTTPException(status_code=400, detail="Cannot cancel fulfilled bounty")
+        _error(400, "Cannot cancel fulfilled bounty", ERR_INVALID_STATUS, request)
 
     return svc_cancel_bounty(db, bounty)
 
 
-@router.post("/check-acp", response_model=ACPSearchResult)
-async def check_acp(query: str = Query(..., description="Search query for ACP registry")):
-    """Check ACP registry for existing services matching a query."""
+@router.post(
+    "/check-acp",
+    response_model=ACPSearchResult,
+    summary="Check ACP registry",
+    description="Check ACP registry for existing services matching a query.",
+    response_description="ACP search results.",
+)
+async def check_acp(query: str = Query(..., description="Search query for ACP registry")) -> ACPSearchResult:
+    """Check ACP registry for matching services.
+
+    Args:
+        query: Search query string.
+
+    Returns:
+        ACPSearchResult with matching agents.
+    """
     return await search_acp_registry(query)

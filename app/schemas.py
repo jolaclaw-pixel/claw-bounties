@@ -1,55 +1,78 @@
-from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+"""Pydantic schemas for request/response validation."""
 from datetime import datetime
+from typing import List, Optional
 
-from app.models import ServiceCategory, BountyStatus  # noqa: F401 — single source of truth
+from pydantic import BaseModel, Field, field_validator
 
-VALID_CATEGORIES = {"digital", "physical"}
+from app.constants import (
+    MAX_BUDGET,
+    MAX_DESCRIPTION_LENGTH,
+    MAX_NAME_LENGTH,
+    MAX_PRICE,
+    MAX_REQUIREMENTS_LENGTH,
+    MAX_TAG_LENGTH,
+    MAX_TITLE_LENGTH,
+    MAX_URL_LENGTH,
+    MIN_DESCRIPTION_LENGTH,
+    MIN_TITLE_LENGTH,
+    VALID_CATEGORIES,
+)
+from app.models import BountyStatus, ServiceCategory  # noqa: F401 — single source of truth
 
 
 # Service schemas
+
+
 class ServiceCreate(BaseModel):
-    agent_name: str = Field(..., min_length=1, max_length=100)
-    name: str = Field(..., min_length=1, max_length=200)
-    description: str = Field(..., min_length=1, max_length=5000)
-    price: float = Field(..., gt=0, le=1_000_000, description="Price in USDC")
-    category: ServiceCategory = ServiceCategory.DIGITAL
-    location: Optional[str] = Field(None, max_length=200)
-    shipping_available: bool = False
-    tags: Optional[str] = Field(None, max_length=500)
-    acp_agent_wallet: Optional[str] = Field(None, max_length=42)
-    acp_job_offering: Optional[str] = Field(None, max_length=200)
+    """Schema for creating a new service listing."""
+
+    agent_name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH, examples=["MyAgent"])
+    name: str = Field(..., min_length=1, max_length=MAX_TITLE_LENGTH, examples=["Logo Design Service"])
+    description: str = Field(..., min_length=1, max_length=MAX_DESCRIPTION_LENGTH, examples=["Professional logo design for your project"])
+    price: float = Field(..., gt=0, le=MAX_PRICE, description="Price in USDC", examples=[50.0])
+    category: ServiceCategory = Field(default=ServiceCategory.DIGITAL, examples=["digital"])
+    location: Optional[str] = Field(None, max_length=200, examples=["San Francisco, CA"])
+    shipping_available: bool = Field(default=False, examples=[False])
+    tags: Optional[str] = Field(None, max_length=MAX_TAG_LENGTH, examples=["design,logo,branding"])
+    acp_agent_wallet: Optional[str] = Field(None, max_length=42, examples=["0x1234567890abcdef1234567890abcdef12345678"])
+    acp_job_offering: Optional[str] = Field(None, max_length=200, examples=["logo-design"])
 
 
 class ServiceResponse(BaseModel):
-    id: int
-    agent_name: str
-    name: str
-    description: str
-    price: float
-    category: str
-    location: Optional[str]
-    shipping_available: bool
-    tags: Optional[str]
-    acp_agent_wallet: Optional[str]
-    acp_job_offering: Optional[str]
+    """Schema for service listing responses."""
+
+    id: int = Field(..., examples=[1])
+    agent_name: str = Field(..., examples=["MyAgent"])
+    name: str = Field(..., examples=["Logo Design Service"])
+    description: str = Field(..., examples=["Professional logo design"])
+    price: float = Field(..., examples=[50.0])
+    category: str = Field(..., examples=["digital"])
+    location: Optional[str] = Field(None, examples=["San Francisco, CA"])
+    shipping_available: bool = Field(..., examples=[False])
+    tags: Optional[str] = Field(None, examples=["design,logo"])
+    acp_agent_wallet: Optional[str] = None
+    acp_job_offering: Optional[str] = None
     created_at: datetime
-    is_active: bool
+    is_active: bool = Field(..., examples=[True])
 
     class Config:
         from_attributes = True
 
 
 # Bounty schemas
+
+
 class BountyCreate(BaseModel):
-    poster_name: str = Field(..., min_length=1, max_length=100)
-    poster_callback_url: Optional[str] = Field(None, max_length=500)
-    title: str = Field(..., min_length=3, max_length=200)
-    description: str = Field(..., min_length=10, max_length=5000)
-    requirements: Optional[str] = Field(None, max_length=2000)
-    budget: float = Field(..., gt=0, le=1_000_000, description="Budget in USDC")
-    category: ServiceCategory = ServiceCategory.DIGITAL
-    tags: Optional[str] = Field(None, max_length=500)
+    """Schema for creating a new bounty."""
+
+    poster_name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH, examples=["MyAgent"])
+    poster_callback_url: Optional[str] = Field(None, max_length=MAX_URL_LENGTH, examples=["https://example.com/webhook"])
+    title: str = Field(..., min_length=MIN_TITLE_LENGTH, max_length=MAX_TITLE_LENGTH, examples=["Need a logo designed"])
+    description: str = Field(..., min_length=MIN_DESCRIPTION_LENGTH, max_length=MAX_DESCRIPTION_LENGTH, examples=["Design a professional logo for my project"])
+    requirements: Optional[str] = Field(None, max_length=MAX_REQUIREMENTS_LENGTH, examples=["Must be SVG format"])
+    budget: float = Field(..., gt=0, le=MAX_BUDGET, description="Budget in USDC", examples=[100.0])
+    category: ServiceCategory = Field(default=ServiceCategory.DIGITAL, examples=["digital"])
+    tags: Optional[str] = Field(None, max_length=MAX_TAG_LENGTH, examples=["design,logo"])
 
     @field_validator("category", mode="before")
     @classmethod
@@ -61,60 +84,68 @@ class BountyCreate(BaseModel):
 
 
 class BountyClaim(BaseModel):
-    """Used when claiming a bounty"""
-    claimer_name: str = Field(..., min_length=1, max_length=100)
-    claimer_callback_url: Optional[str] = None
+    """Used when claiming a bounty."""
+
+    claimer_name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH, examples=["ClaimerAgent"])
+    claimer_callback_url: Optional[str] = Field(None, examples=["https://example.com/webhook"])
 
 
 class BountyClaimResponse(BaseModel):
-    """Response when bounty is claimed - includes one-time secret"""
-    bounty_id: int
-    claimed_by: str
-    claimer_secret: str = Field(..., description="Save this! Required to unclaim or provide deliverables. Shown only once.")
-    message: str
+    """Response when bounty is claimed — includes one-time secret."""
+
+    bounty_id: int = Field(..., examples=[1])
+    claimed_by: str = Field(..., examples=["ClaimerAgent"])
+    claimer_secret: str = Field(..., description="Save this! Required to unclaim or provide deliverables. Shown only once.", examples=["abc123secret"])
+    message: str = Field(..., examples=["Bounty claimed! SAVE YOUR claimer_secret."])
 
 
 class BountyMatch(BaseModel):
-    """Used when matching a bounty to an ACP service - requires poster auth"""
+    """Used when matching a bounty to an ACP service — requires poster auth."""
+
     poster_secret: str = Field(..., description="Secret token returned when bounty was created")
     service_id: Optional[int] = None
-    acp_agent_wallet: str
-    acp_job_offering: str
+    acp_agent_wallet: str = Field(..., examples=["0x1234567890abcdef1234567890abcdef12345678"])
+    acp_job_offering: str = Field(..., examples=["logo-design"])
 
 
 class BountyUnclaim(BaseModel):
-    """Used when unclaiming a bounty"""
+    """Used when unclaiming a bounty."""
+
     claimer_secret: str = Field(..., description="Secret token returned when bounty was claimed")
 
 
 class BountyFulfill(BaseModel):
-    """Used when bounty is fulfilled via ACP"""
-    acp_job_id: str
+    """Used when bounty is fulfilled via ACP."""
+
+    acp_job_id: str = Field(..., examples=["job-123"])
     poster_secret: str = Field(..., description="Secret token returned when bounty was created")
 
 
 class BountyCancel(BaseModel):
-    """Used when cancelling a bounty"""
+    """Used when cancelling a bounty."""
+
     poster_secret: str = Field(..., description="Secret token returned when bounty was created")
 
 
 class BountyResponse(BaseModel):
-    id: int
-    poster_name: str
-    poster_callback_url: Optional[str]
-    title: str
-    description: str
-    requirements: Optional[str]
-    budget: float
-    category: str
-    tags: Optional[str]
-    status: str
-    matched_service_id: Optional[int]
-    matched_acp_agent: Optional[str]
-    matched_acp_job: Optional[str]
-    matched_at: Optional[datetime]
-    acp_job_id: Optional[str]
-    fulfilled_at: Optional[datetime]
+    """Schema for bounty responses."""
+
+    id: int = Field(..., examples=[1])
+    poster_name: str = Field(..., examples=["MyAgent"])
+    poster_callback_url: Optional[str] = None
+    title: str = Field(..., examples=["Need a logo designed"])
+    description: str = Field(..., examples=["Design a professional logo"])
+    requirements: Optional[str] = None
+    budget: float = Field(..., examples=[100.0])
+    category: str = Field(..., examples=["digital"])
+    tags: Optional[str] = None
+    status: str = Field(..., examples=["open"])
+    matched_service_id: Optional[int] = None
+    matched_acp_agent: Optional[str] = None
+    matched_acp_job: Optional[str] = None
+    matched_at: Optional[datetime] = None
+    acp_job_id: Optional[str] = None
+    fulfilled_at: Optional[datetime] = None
     created_at: datetime
 
     class Config:
@@ -122,53 +153,78 @@ class BountyResponse(BaseModel):
 
 
 # ACP Agent info from registry
+
+
 class ACPAgent(BaseModel):
-    wallet_address: str
-    name: str
-    description: str
-    job_offerings: List[str]
+    """ACP agent info from the registry cache."""
+
+    wallet_address: str = Field(..., examples=["0xabc123"])
+    name: str = Field(..., examples=["TraderBot"])
+    description: str = Field(..., examples=["Automated trading agent"])
+    job_offerings: List[str] = Field(default_factory=list, examples=[["trade-execution"]])
 
 
 class ACPSearchResult(BaseModel):
-    found: bool
+    """Result of an ACP agent search."""
+
+    found: bool = Field(..., examples=[True])
     agents: List[ACPAgent] = []
-    message: str
+    message: str = Field(..., examples=["Found 3 matching service(s) on ACP"])
 
 
 # List responses
+
+
 class ServiceList(BaseModel):
+    """Response for service listing endpoints."""
+
     services: List[ServiceResponse]
-    total: int
+    total: int = Field(..., examples=[42])
 
 
 class BountyList(BaseModel):
+    """Response for bounty listing endpoints."""
+
     bounties: List[BountyResponse]
-    total: int
+    total: int = Field(..., examples=[10])
 
 
-# Bounty creation response - includes secret (ONE TIME ONLY)
+# Bounty creation response — includes secret (ONE TIME ONLY)
+
+
 class BountyCreatedResponse(BaseModel):
+    """Response after creating a bounty — includes the one-time secret."""
+
     bounty: BountyResponse
     poster_secret: str = Field(..., description="Save this! Required to modify/cancel bounty. Shown only once.")
 
 
-# Bounty post response - includes ACP check
+# Bounty post response — includes ACP check
+
+
 class BountyPostResponse(BaseModel):
+    """Response after posting a bounty — includes ACP match check."""
+
     bounty: Optional[BountyResponse] = None
     poster_secret: Optional[str] = Field(None, description="Save this! Required to modify/cancel bounty. Shown only once.")
     acp_match: Optional[ACPSearchResult] = None
-    action: str  # "posted" | "acp_available"
-    message: str
+    action: str = Field(..., examples=["posted"])  # "posted" | "acp_available"
+    message: str = Field(..., examples=["Bounty posted!"])
 
 
-# Service creation response - includes secret
+# Service creation response — includes secret
+
+
 class ServiceCreatedResponse(BaseModel):
+    """Response after creating a service — includes the one-time secret."""
+
     service: ServiceResponse
     agent_secret: str = Field(..., description="Save this! Required to modify/delete service. Shown only once.")
 
 
 class ServiceUpdate(BaseModel):
-    """Used when updating a service"""
+    """Used when updating a service."""
+
     agent_secret: str = Field(..., description="Secret token returned when service was created")
     name: Optional[str] = None
     description: Optional[str] = None
@@ -182,5 +238,37 @@ class ServiceUpdate(BaseModel):
 
 
 class ServiceDelete(BaseModel):
-    """Used when deleting a service"""
+    """Used when deleting a service."""
+
     agent_secret: str = Field(..., description="Secret token returned when service was created")
+
+
+# Pagination metadata
+
+
+class PaginationMeta(BaseModel):
+    """Pagination metadata for list responses."""
+
+    total: int = Field(..., examples=[42])
+    page: int = Field(..., examples=[1])
+    per_page: int = Field(..., examples=[50])
+
+
+class EnvelopedBountyList(BaseModel):
+    """Enveloped response for bounty list endpoints."""
+
+    data: List[BountyResponse]
+    meta: PaginationMeta
+    # Keep backward compat
+    bounties: List[BountyResponse]
+    total: int
+
+
+class EnvelopedServiceList(BaseModel):
+    """Enveloped response for service list endpoints."""
+
+    data: List[ServiceResponse]
+    meta: PaginationMeta
+    # Keep backward compat
+    services: List[ServiceResponse]
+    total: int

@@ -109,7 +109,7 @@ async def bounty_detail(request: Request, bounty_id: int, db: Session = Depends(
         for tag in tags:
             matching = (
                 db.query(Service)
-                .filter(Service.is_active == True, Service.tags.ilike(f"%{tag.strip()}%"))
+                .filter(Service.is_active, Service.tags.ilike(f"%{tag.strip()}%"))
                 .limit(3)
                 .all()
             )
@@ -224,7 +224,7 @@ async def services_page(
     db: Session = Depends(get_db),
 ) -> Any:
     """Paginated services listing with filters."""
-    query = db.query(Service).filter(Service.is_active == True)
+    query = db.query(Service).filter(Service.is_active)
     if category:
         query = query.filter(Service.category == category)
     if search:

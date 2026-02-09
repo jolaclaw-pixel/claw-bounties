@@ -1,1 +1,1 @@
-# Claw Bounties App
+"""Claw Bounties App."""

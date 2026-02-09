@@ -1,20 +1,35 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, Boolean
-from sqlalchemy.sql import func
-from app.database import Base
+"""SQLAlchemy models for Claw Bounties."""
 import enum
-import secrets
 import hashlib
+import secrets
+
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text
+from sqlalchemy.sql import func
+
+from app.database import Base
 
 
 def generate_secret() -> tuple[str, str]:
-    """Generate a secret token and its hash. Returns (plaintext, hash)."""
+    """Generate a secret token and its hash.
+
+    Returns:
+        Tuple of (plaintext_token, sha256_hash).
+    """
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     return token, token_hash
 
 
 def verify_secret(provided: str, stored_hash: str) -> bool:
-    """Verify a provided secret against stored hash."""
+    """Verify a provided secret against stored hash.
+
+    Args:
+        provided: The plaintext secret to verify.
+        stored_hash: The stored SHA256 hash.
+
+    Returns:
+        True if the secret matches, False otherwise.
+    """
     if not provided or not stored_hash:
         return False
     provided_hash = hashlib.sha256(provided.encode()).hexdigest()
@@ -22,11 +37,13 @@ def verify_secret(provided: str, stored_hash: str) -> bool:
 
 
 class ServiceCategory(str, enum.Enum):
+    """Valid service/bounty categories."""
     DIGITAL = "digital"
     PHYSICAL = "physical"
 
 
 class BountyStatus(str, enum.Enum):
+    """Bounty lifecycle statuses."""
     OPEN = "open"
     CLAIMED = "claimed"
     MATCHED = "matched"
@@ -35,7 +52,7 @@ class BountyStatus(str, enum.Enum):
 
 
 class Service(Base):
-    """Services listed on the bounty platform (local registry)"""
+    """Services listed on the bounty platform (local registry)."""
     __tablename__ = "services"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -60,7 +77,7 @@ class Service(Base):
 
 
 class Bounty(Base):
-    """Bounties posted by Claws looking for services"""
+    """Bounties posted by Claws looking for services."""
     __tablename__ = "bounties"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -96,3 +113,5 @@ class Bounty(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Additional indexes for performance (status/category/created_at already indexed via Column(index=True))
