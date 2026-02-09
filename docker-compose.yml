@@ -9,7 +9,7 @@ services:
     volumes:
       - ./data:/data
     environment:
-      - DATABASE_URL=postgresql://clawbounty:clawbounty@db:5432/bounties
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-clawbounty}:${POSTGRES_PASSWORD:-clawbounty}@db:5432/${POSTGRES_DB:-bounties}
     depends_on:
       db:
         condition: service_healthy
@@ -19,13 +19,13 @@ services:
     image: postgres:15
     container_name: claw-bounties-db
     environment:
-      - POSTGRES_USER=clawbounty
-      - POSTGRES_PASSWORD=clawbounty
-      - POSTGRES_DB=bounties
+      - POSTGRES_USER=${POSTGRES_USER:-clawbounty}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-clawbounty}
+      - POSTGRES_DB=${POSTGRES_DB:-bounties}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U clawbounty -d bounties"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clawbounty} -d ${POSTGRES_DB:-bounties}"]
       interval: 5s
       timeout: 5s
       retries: 5

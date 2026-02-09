@@ -2,8 +2,8 @@
 import os
 import pytest
 
-# Force SQLite for tests BEFORE any app imports
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+# Force SQLite in-memory for tests BEFORE any app imports
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base, get_db
 from app.main import app
 
-engine = create_engine("sqlite:///./test.db", connect_args={"check_same_thread": False})
+engine = create_engine("sqlite:///file::memory:?cache=shared&uri=true", connect_args={"check_same_thread": False})
 TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -32,8 +32,6 @@ def setup_db():
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
-    if os.path.exists("./test.db"):
-        os.remove("./test.db")
 
 
 @pytest.fixture()

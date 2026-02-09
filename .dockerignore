@@ -5,7 +5,6 @@ __pycache__/
 *.pyc
 server.log
 *.db
-alembic/
 README.md
 SKILL.md
 tests/

@@ -1,5 +1,6 @@
 """Claw Bounties — application setup, middleware, lifespan, and router mounting."""
 import os
+import time
 import uuid
 import asyncio
 import logging
@@ -13,7 +14,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response, FileRes
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: F401
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -64,7 +65,7 @@ async def _build_sitemap() -> str:
             "https://clawbounty.io/post-bounty",
             "https://clawbounty.io/success-stories",
         ]
-        for b in db.query(Bounty).all():
+        for b in db.query(Bounty.id).yield_per(100):
             urls.append(f"https://clawbounty.io/bounties/{b.id}")
     finally:
         db.close()
@@ -184,7 +185,7 @@ HONEYPOT_PATHS = {
 async def block_scanners(request: Request, call_next):
     """Return 404 for common scanner/bot paths."""
     if request.url.path in HONEYPOT_PATHS:
-        return JSONResponse(status_code=404, content={"error": "not found"})
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
     return await call_next(request)
 
 
@@ -212,6 +213,49 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     return response
+
+
+@app.middleware("http")
+async def request_logging(request: Request, call_next):
+    """Log method, path, status, and duration for every request."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    logger.info(f"{request.method} {request.url.path} {response.status_code} {duration_ms:.1f}ms")
+    return response
+
+
+# Web form POST endpoints that need CSRF protection
+_CSRF_PROTECTED_PATHS = {
+    "/post-bounty", "/list-service",
+}
+
+
+@app.middleware("http")
+async def csrf_protection(request: Request, call_next):
+    """Check Origin/Referer on POST requests to web form endpoints for CSRF protection."""
+    if request.method == "POST":
+        path = request.url.path
+        # Protect web form endpoints (not /api/ which are for programmatic access)
+        is_web_form = path in _CSRF_PROTECTED_PATHS or (
+            path.startswith("/bounties/") and (path.endswith("/claim") or path.endswith("/fulfill"))
+        )
+        if is_web_form:
+            origin = request.headers.get("origin")
+            referer = request.headers.get("referer")
+            allowed_origins = {
+                "https://clawbounty.io",
+                "http://localhost:8000",
+                "http://127.0.0.1:8000",
+            }
+            # Allow if Origin or Referer matches
+            origin_ok = origin in allowed_origins if origin else False
+            referer_ok = any(referer and referer.startswith(o) for o in allowed_origins) if referer else False
+            if not origin_ok and not referer_ok:
+                # If neither header present (e.g. same-origin without headers), allow
+                if origin or referer:
+                    return JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -290,7 +334,7 @@ async def robots_txt() -> PlainTextResponse:
 
 
 @app.get("/sitemap.xml")
-async def sitemap_xml() -> RawResponse:
+async def sitemap_xml() -> Response:
     """Serve the auto-generated sitemap."""
     global _sitemap_cache
     if _sitemap_cache is None:
@@ -386,5 +430,5 @@ async def generic_exception_handler(request: Request, exc: Exception) -> Any:
     """Catch-all error handler: JSON for API routes, HTML for web routes."""
     logger.error(f"Unhandled exception on {request.url.path}: {exc}")
     if request.url.path.startswith("/api/"):
-        return JSONResponse(status_code=500, content={"error": "Internal server error"})
-    return templates.TemplateResponse("error.html", {"request": request, "error": str(exc)}, status_code=500)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    return templates.TemplateResponse("error.html", {"request": request, "error": "An internal error occurred"}, status_code=500)

@@ -1,20 +1,8 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
-from enum import Enum
 
-
-class ServiceCategory(str, Enum):
-    digital = "digital"
-    physical = "physical"
-
-
-class BountyStatus(str, Enum):
-    open = "open"
-    matched = "matched"
-    fulfilled = "fulfilled"
-    cancelled = "cancelled"
-
+from app.models import ServiceCategory, BountyStatus  # noqa: F401 — single source of truth
 
 VALID_CATEGORIES = {"digital", "physical"}
 
@@ -25,7 +13,7 @@ class ServiceCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: str = Field(..., min_length=1, max_length=5000)
     price: float = Field(..., gt=0, le=1_000_000, description="Price in USDC")
-    category: ServiceCategory = ServiceCategory.digital
+    category: ServiceCategory = ServiceCategory.DIGITAL
     location: Optional[str] = Field(None, max_length=200)
     shipping_available: bool = False
     tags: Optional[str] = Field(None, max_length=500)
@@ -60,7 +48,7 @@ class BountyCreate(BaseModel):
     description: str = Field(..., min_length=10, max_length=5000)
     requirements: Optional[str] = Field(None, max_length=2000)
     budget: float = Field(..., gt=0, le=1_000_000, description="Budget in USDC")
-    category: ServiceCategory = ServiceCategory.digital
+    category: ServiceCategory = ServiceCategory.DIGITAL
     tags: Optional[str] = Field(None, max_length=500)
 
     @field_validator("category", mode="before")

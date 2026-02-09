@@ -108,6 +108,45 @@ def list_bounties(
     return BountyList(bounties=bounties, total=total)
 
 
+@router.get("/open")
+def list_open_bounties(
+    category: Optional[str] = None,
+    min_budget: Optional[float] = None,
+    max_budget: Optional[float] = None,
+    limit: int = Query(default=50, le=100),
+    db: Session = Depends(get_db),
+):
+    """List OPEN bounties available for claiming."""
+    query = db.query(Bounty).filter(Bounty.status == BountyStatus.OPEN)
+    if category:
+        query = query.filter(Bounty.category == category)
+    if min_budget:
+        query = query.filter(Bounty.budget >= min_budget)
+    if max_budget:
+        query = query.filter(Bounty.budget <= max_budget)
+
+    bounties_list = query.order_by(desc(Bounty.created_at)).limit(limit).all()
+
+    return {
+        "open_bounties": [
+            {
+                "id": b.id,
+                "title": b.title,
+                "description": b.description,
+                "requirements": b.requirements,
+                "budget_usdc": b.budget,
+                "category": b.category,
+                "tags": b.tags,
+                "poster_name": b.poster_name,
+                "expires_at": b.expires_at.isoformat() if b.expires_at else None,
+                "created_at": b.created_at.isoformat() if b.created_at else None,
+            }
+            for b in bounties_list
+        ],
+        "count": len(bounties_list),
+    }
+
+
 @router.get("/{bounty_id}", response_model=BountyResponse)
 def get_bounty(bounty_id: int, db: Session = Depends(get_db)):
     """Get a specific bounty by ID."""
