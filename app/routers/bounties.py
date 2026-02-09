@@ -3,9 +3,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import Optional
 from datetime import datetime
-import subprocess
-import json
-import os
 import httpx
 import logging
 
@@ -27,6 +24,12 @@ async def send_bounty_webhook(callback_url: str, event: str, bounty_data: dict):
     if not callback_url:
         return
     
+    # Validate callback URL before sending
+    from app.utils import validate_callback_url
+    if not validate_callback_url(callback_url):
+        logger.warning(f"Blocked webhook to invalid/private URL: {callback_url}")
+        return
+    
     payload = {
         "event": event,
         "bounty": bounty_data,
@@ -40,34 +43,22 @@ async def send_bounty_webhook(callback_url: str, event: str, bounty_data: dict):
     except Exception as e:
         logger.error(f"Webhook failed for {callback_url}: {e}")
 
-# Path to ACP skill for registry scanning
-ACP_SKILL_PATH = os.getenv("ACP_SKILL_PATH", "/Users/ethermage/.openclaw/virtuals-protocol-acp")
-
 
 async def search_acp_registry(query: str) -> ACPSearchResult:
-    """Search ACP registry for matching agents/services."""
+    """Search ACP registry using the in-memory cache."""
     try:
-        result = subprocess.run(
-            ["npx", "tsx", "scripts/index.ts", "browse_agents", query],
-            cwd=ACP_SKILL_PATH,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        from app.acp_registry import search_agents
         
-        if result.returncode != 0:
-            return ACPSearchResult(found=False, agents=[], message=f"ACP search failed: {result.stderr}")
+        results = search_agents(query)
         
-        data = json.loads(result.stdout)
-        
-        if not data or len(data) == 0:
+        if not results:
             return ACPSearchResult(found=False, agents=[], message="No matching services found on ACP")
         
         agents = []
-        for agent in data:
-            job_offerings = [j.get("name", "") for j in agent.get("jobOfferings", [])]
+        for agent in results:
+            job_offerings = [j.get("name", "") for j in agent.get("job_offerings", [])]
             agents.append(ACPAgent(
-                wallet_address=agent.get("walletAddress", ""),
+                wallet_address=agent.get("wallet_address", ""),
                 name=agent.get("name", "Unknown"),
                 description=agent.get("description", ""),
                 job_offerings=job_offerings
@@ -78,10 +69,6 @@ async def search_acp_registry(query: str) -> ACPSearchResult:
             agents=agents,
             message=f"Found {len(agents)} matching service(s) on ACP"
         )
-    except subprocess.TimeoutExpired:
-        return ACPSearchResult(found=False, agents=[], message="ACP search timed out")
-    except json.JSONDecodeError:
-        return ACPSearchResult(found=False, agents=[], message="Invalid response from ACP")
     except Exception as e:
         return ACPSearchResult(found=False, agents=[], message=f"ACP search error: {str(e)}")
 
@@ -94,6 +81,12 @@ async def create_bounty(bounty: BountyCreate, db: Session = Depends(get_db)):
     
     Returns a poster_secret token - SAVE THIS! It's required to modify/cancel the bounty.
     """
+    # Validate callback URL if provided
+    if bounty.poster_callback_url:
+        from app.utils import validate_callback_url
+        if not validate_callback_url(bounty.poster_callback_url):
+            raise HTTPException(status_code=400, detail="Invalid callback URL: private/internal addresses are not allowed")
+    
     # Build search query from bounty details
     search_query = f"{bounty.title} {bounty.tags or ''}"
     
@@ -197,6 +190,12 @@ async def claim_bounty(
     Returns a claimer_secret token - SAVE THIS! It's required to unclaim or manage your claim.
     Notifies the poster via webhook if callback URL was provided.
     """
+    # Validate callback URL if provided
+    if claim.claimer_callback_url:
+        from app.utils import validate_callback_url
+        if not validate_callback_url(claim.claimer_callback_url):
+            raise HTTPException(status_code=400, detail="Invalid callback URL: private/internal addresses are not allowed")
+    
     bounty = db.query(Bounty).filter(Bounty.id == bounty_id).first()
     if not bounty:
         raise HTTPException(status_code=404, detail="Bounty not found")
