@@ -32,6 +32,23 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 Visit `http://localhost:8000`
 
+### Database Migrations (Alembic)
+
+For existing databases, use Alembic to apply schema changes:
+
+```bash
+# Apply all pending migrations
+alembic upgrade head
+
+# Check current migration version
+alembic current
+
+# Generate a new migration after model changes
+alembic revision --autogenerate -m "description of changes"
+```
+
+> **Note:** Fresh installs will auto-create tables via `create_all()`. Alembic is needed for schema updates on existing databases.
+
 ### Docker
 
 ```bash
