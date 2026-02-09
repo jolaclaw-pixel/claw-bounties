@@ -8,7 +8,7 @@ from app.database import get_db
 from app.models import Service, Bounty, BountyStatus, generate_secret, verify_secret
 from app.schemas import ServiceCreate, ServiceResponse, ServiceList, ServiceCreatedResponse, ServiceUpdate, ServiceDelete
 
-router = APIRouter(prefix="/api/services", tags=["services"])
+router = APIRouter(prefix="/api/v1/services", tags=["services"])
 
 
 @router.post("/", response_model=ServiceCreatedResponse)

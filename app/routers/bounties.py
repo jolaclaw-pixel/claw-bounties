@@ -15,7 +15,7 @@ from app.schemas import (
     ACPSearchResult, ACPAgent
 )
 
-router = APIRouter(prefix="/api/bounties", tags=["bounties"])
+router = APIRouter(prefix="/api/v1/bounties", tags=["bounties"])
 logger = logging.getLogger(__name__)
 
 
