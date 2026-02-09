@@ -52,7 +52,7 @@
             </div>
             <div class="flex justify-between">
                 <dt class="text-virtuals-muted">Budget</dt>
-                <dd class="text-virtuals-cyan font-semibold">${{ bounty.budget }} USDC</dd>
+                <dd class="text-virtuals-cyan font-semibold">{{ "$%.0f"|format(bounty.budget) if bounty.budget == (bounty.budget|int) else "$%.2f"|format(bounty.budget) }} USDC</dd>
             </div>
             <div class="flex justify-between">
                 <dt class="text-virtuals-muted">Status</dt>

@@ -20,11 +20,14 @@
                 <div class="flex items-center gap-2 mb-3">
                     <span class="badge status-{{ bounty.status }}">{{ bounty.status }}</span>
                     <span class="badge category-{{ bounty.category }}">{{ bounty.category }}</span>
+                    {% if bounty.expires_at and expires_in_days is not none and expires_in_days <= 0 %}
+                    <span class="badge bg-red-500/20 text-red-400">EXPIRED</span>
+                    {% endif %}
                 </div>
                 <h1 class="text-2xl font-bold text-white">{{ bounty.title }}</h1>
             </div>
             <div class="text-right">
-                <div class="text-3xl font-bold text-virtuals-cyan">${{ bounty.budget }}</div>
+                <div class="text-3xl font-bold text-virtuals-cyan">{{ "$%.0f"|format(bounty.budget) if bounty.budget == (bounty.budget|int) else "$%.2f"|format(bounty.budget) }}</div>
                 <div class="text-virtuals-muted text-sm">USDC</div>
                 
                 <!-- Share Buttons -->
@@ -100,6 +103,31 @@
                     <p class="text-virtuals-muted text-sm mb-2">A matching service already exists on Virtuals Protocol ACP.</p>
                     <code class="text-virtuals-cyan text-sm">{{ bounty.matched_acp_service }}</code>
                 </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Matching ACP Agents -->
+        {% if matching_agents %}
+        <div class="mb-8">
+            <h3 class="text-sm font-semibold text-virtuals-muted uppercase tracking-wide mb-3">Matching ACP Agents</h3>
+            <div class="grid gap-3">
+                {% for agent in matching_agents %}
+                <a href="/agents/{{ agent.id }}" class="flex items-center gap-3 p-3 rounded-lg bg-virtuals-surface hover:bg-virtuals-border transition-colors">
+                    {% if agent.profile_pic %}
+                    <img src="{{ agent.profile_pic }}" alt="{{ agent.name }}" class="w-8 h-8 rounded-lg object-cover">
+                    {% else %}
+                    <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-virtuals-cyan to-virtuals-cyan/60 flex items-center justify-center text-xs font-bold text-virtuals-black">{{ agent.name[0] if agent.name else '?' }}</div>
+                    {% endif %}
+                    <div class="flex-1 min-w-0">
+                        <div class="font-medium text-white text-sm truncate">{{ agent.name }}</div>
+                        <div class="text-xs text-virtuals-muted truncate">{{ agent.description[:80] if agent.description else 'No description' }}{% if agent.description and agent.description|length > 80 %}…{% endif %}</div>
+                    </div>
+                    {% if agent.stats and agent.stats.success_rate is not none %}
+                    <span class="text-xs {% if agent.stats.success_rate >= 90 %}text-green-400{% elif agent.stats.success_rate >= 70 %}text-yellow-400{% else %}text-red-400{% endif %}">{{ agent.stats.success_rate }}%</span>
+                    {% endif %}
+                </a>
+                {% endfor %}
             </div>
         </div>
         {% endif %}

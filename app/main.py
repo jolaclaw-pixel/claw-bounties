@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from math import ceil
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from typing import Optional
@@ -109,6 +110,15 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan
 )
+
+# Bot scanner silencer - BEFORE other middleware
+HONEYPOT_PATHS = {"/wp-login.php", "/wp-admin", "/admin", "/index.php", "/.env", "/xmlrpc.php", "/wp-content"}
+
+@app.middleware("http")
+async def block_scanners(request: Request, call_next):
+    if request.url.path in HONEYPOT_PATHS:
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    return await call_next(request)
 
 # CORS middleware
 app.add_middleware(
@@ -233,11 +243,23 @@ async def bounty_detail(request: Request, bounty_id: int, db: Session = Depends(
         delta = bounty.expires_at - datetime.utcnow()
         expires_in_days = max(0, delta.days)
     
+    # Find matching ACP agents
+    matching_agents = []
+    try:
+        from app.acp_registry import search_agents as _search_acp
+        search_terms = bounty.title
+        if bounty.tags:
+            search_terms += " " + bounty.tags.replace(",", " ")
+        matching_agents = _search_acp(search_terms)[:5]
+    except Exception:
+        pass
+    
     return templates.TemplateResponse("bounty_detail.html", {
         "request": request,
         "bounty": bounty,
         "matching_services": list(set(matching_services))[:6],
-        "expires_in_days": expires_in_days
+        "expires_in_days": expires_in_days,
+        "matching_agents": matching_agents
     })
 
 
@@ -569,7 +591,7 @@ async def offline_page(request: Request):
 
 
 @app.get("/registry")
-async def registry_page(request: Request, q: Optional[str] = None):
+async def registry_page(request: Request, q: Optional[str] = None, page: int = 1):
     """Browse the Virtuals ACP Registry."""
     from app.acp_registry import get_cached_agents_async, categorize_agents, search_agents
     
@@ -581,18 +603,29 @@ async def registry_page(request: Request, q: Optional[str] = None):
     if q and q.strip():
         agents = search_agents(q)
     
-    categorized = categorize_agents(agents)
+    total_agents_count = len(agents)
     online_count = sum(1 for a in agents if a.get("status", {}).get("online", False))
+    
+    # Paginate
+    per_page = 50
+    total_pages = max(1, ceil(total_agents_count / per_page))
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * per_page
+    agents_page = agents[start:start + per_page]
+    
+    categorized = categorize_agents(agents_page)
     
     return templates.TemplateResponse("registry.html", {
         "request": request,
         "products": categorized["products"],
         "services": categorized["services"],
-        "total_agents": len(agents),
+        "total_agents": total_agents_count,
         "online_count": online_count,
         "last_updated": last_updated,
         "error": error,
-        "query": q
+        "query": q,
+        "page": page,
+        "total_pages": total_pages
     })
 
 
@@ -667,6 +700,52 @@ async def get_registry():
 @app.get("/health")
 async def health():
     return {"status": "healthy", "service": "claw-bounties"}
+
+
+# Robots.txt
+@app.get("/robots.txt")
+async def robots_txt():
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: https://clawbounty.io/sitemap.xml\n")
+
+
+# Sitemap.xml
+@app.get("/sitemap.xml")
+async def sitemap_xml(db: Session = Depends(get_db)):
+    from fastapi.responses import Response as RawResponse
+    from app.acp_registry import get_cached_agents_async
+
+    urls = [
+        "https://clawbounty.io/",
+        "https://clawbounty.io/bounties",
+        "https://clawbounty.io/registry",
+        "https://clawbounty.io/post-bounty",
+        "https://clawbounty.io/success-stories",
+    ]
+
+    bounties_list = db.query(Bounty).all()
+    for b in bounties_list:
+        urls.append(f"https://clawbounty.io/bounties/{b.id}")
+
+    cache = await get_cached_agents_async()
+    for a in cache.get("agents", []):
+        if a.get("id"):
+            urls.append(f"https://clawbounty.io/agents/{a['id']}")
+
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    for url in urls:
+        xml += f"  <url><loc>{url}</loc></url>\n"
+    xml += "</urlset>"
+
+    return RawResponse(content=xml, media_type="application/xml")
+
+
+# JSON error handler for API 500s
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(status_code=500, content={"error": "Internal server error"})
+    return templates.TemplateResponse("error.html", {"request": request, "error": str(exc)}, status_code=500)
 
 
 # ============ Skill Manifest ============
@@ -967,6 +1046,7 @@ async def api_list_agents(
     request: Request,
     category: Optional[str] = None,
     online_only: bool = False,
+    page: int = Query(default=1, ge=1),
     limit: int = Query(default=100, le=500)
 ):
     """List ACP agents from the registry."""
@@ -982,13 +1062,20 @@ async def api_list_agents(
     if online_only:
         agents = [a for a in agents if a.get("status", {}).get("online", False)]
     
-    agents = agents[:limit]
+    total = len(agents)
+    total_pages = max(1, ceil(total / limit))
+    start = (page - 1) * limit
+    agents_page = agents[start:start + limit]
     
     return {
-        "agents": agents,
-        "count": len(agents),
+        "agents": agents_page,
+        "count": len(agents_page),
         "total_in_registry": len(cache.get("agents", [])),
-        "last_updated": cache.get("last_updated")
+        "last_updated": cache.get("last_updated"),
+        "page": page,
+        "per_page": limit,
+        "total_pages": total_pages,
+        "has_next": page < total_pages
     }
 
 

@@ -94,7 +94,7 @@ function copyInstall(elementId) {
             <h3 class="font-semibold text-white mb-1.5 sm:mb-2 line-clamp-1 text-sm sm:text-base">{{ bounty.title }}</h3>
             <p class="text-virtuals-muted text-xs sm:text-sm mb-3 sm:mb-4 line-clamp-2">{{ bounty.description[:100] }}{% if bounty.description|length > 100 %}...{% endif %}</p>
             <div class="flex items-center justify-between">
-                <span class="text-base sm:text-lg font-bold text-virtuals-cyan">${{ bounty.budget }} <span class="text-xs font-normal text-virtuals-muted">USDC</span></span>
+                <span class="text-base sm:text-lg font-bold text-virtuals-cyan">{{ "$%.0f"|format(bounty.budget) if bounty.budget == (bounty.budget|int) else "$%.2f"|format(bounty.budget) }} <span class="text-xs font-normal text-virtuals-muted">USDC</span></span>
                 <span class="text-virtuals-muted text-xs sm:text-sm truncate max-w-[100px]">{{ bounty.poster_name }}</span>
             </div>
         </a>

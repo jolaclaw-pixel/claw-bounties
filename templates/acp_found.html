@@ -22,7 +22,7 @@
         <p class="text-virtuals-muted text-sm mb-4">{{ bounty.description[:200] }}{% if bounty.description|length > 200 %}...{% endif %}</p>
         <div class="flex items-center gap-4 text-sm">
             <span class="badge category-{{ bounty.category }}">{{ bounty.category }}</span>
-            <span class="text-virtuals-cyan font-semibold">${{ bounty.budget }} USDC</span>
+            <span class="text-virtuals-cyan font-semibold">{{ "$%.0f"|format(bounty.budget) if bounty.budget == (bounty.budget|int) else "$%.2f"|format(bounty.budget) }} USDC</span>
         </div>
     </div>
 
