@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
+from fastapi.responses import JSONResponse, Response
+
 from app.constants import (
     DEFAULT_PAGE_SIZE,
     ERR_INVALID_SECRET,
@@ -50,6 +52,7 @@ def _error(status: int, detail: str, code: str, request: Request) -> NoReturn:
 @router.post(
     "/",
     response_model=ServiceCreatedResponse,
+    status_code=201,
     summary="Create a service",
     description="List a new service or resource. Returns an agent_secret token — SAVE THIS!",
     response_description="Created service with one-time agent_secret.",
@@ -126,7 +129,7 @@ def list_services(
     Returns:
         Enveloped service list with pagination metadata.
     """
-    query = db.query(Service).filter(Service.is_active == True)  # noqa: E712
+    query = db.query(Service).filter(Service.is_active.is_(True))
     if category:
         query = query.filter(Service.category == category)
     if min_price:
@@ -147,8 +150,8 @@ def list_services(
             | (Service.tags.ilike(search_term))
         )
 
-    total = query.count()
     services = query.order_by(desc(Service.created_at)).offset(offset).limit(limit).all()
+    total = query.count()
     page = (offset // limit) + 1 if limit > 0 else 1
     service_responses = [ServiceResponse.model_validate(s) for s in services]
 
@@ -188,10 +191,7 @@ def get_service(service_id: int, request: Request, db: Session = Depends(get_db)
 
     if_none_match = request.headers.get("If-None-Match")
     if if_none_match and if_none_match.strip('"') == etag:
-        from fastapi.responses import Response
         return Response(status_code=304, headers={"ETag": f'"{etag}"'})
-
-    from fastapi.responses import JSONResponse
     return JSONResponse(
         content=response_data.model_dump(mode="json"),
         headers={"ETag": f'"{etag}"'},

@@ -56,7 +56,7 @@ class CircuitBreaker:
             elapsed = time.time() - self.last_failure_time
             if elapsed >= self.consecutive_recovery_timeout:
                 self.state = CircuitState.HALF_OPEN
-                logger.info(f"Circuit breaker '{self.name}' transitioning to HALF_OPEN")
+                logger.info("Circuit breaker '%s' state=HALF_OPEN action=transition", self.name)
                 return True
             return False
         # HALF_OPEN — allow one call
@@ -65,7 +65,7 @@ class CircuitBreaker:
     def record_success(self) -> None:
         """Record a successful call, resetting the breaker to closed."""
         if self.state != CircuitState.CLOSED:
-            logger.info(f"Circuit breaker '{self.name}' closing (recovered)")
+            logger.info("Circuit breaker '%s' state=CLOSED action=recovered", self.name)
         self.failure_count = 0
         self.state = CircuitState.CLOSED
         self.consecutive_recovery_timeout = self.recovery_timeout
@@ -82,8 +82,8 @@ class CircuitBreaker:
                 self.consecutive_recovery_timeout * 2, 600.0
             )
             logger.warning(
-                f"Circuit breaker '{self.name}' OPEN after {self.failure_count} failures. "
-                f"Recovery in {self.consecutive_recovery_timeout:.0f}s"
+                "Circuit breaker '%s' state=OPEN action=opened failures=%d recovery_timeout=%.0fs",
+                self.name, self.failure_count, self.consecutive_recovery_timeout,
             )
 
 

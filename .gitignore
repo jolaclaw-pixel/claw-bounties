@@ -4,3 +4,5 @@ __pycache__/
 venv/
 *.db
 .DS_Store
+.coverage
+htmlcov/

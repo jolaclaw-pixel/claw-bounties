@@ -1,35 +1,39 @@
-version: '3.8'
+version: "3.8"
 
 services:
-  claw-bounties:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bounties
+      POSTGRES_PASSWORD: bounties_dev
+      POSTGRES_DB: bounties
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bounties"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
     build: .
-    container_name: claw-bounties
     ports:
       - "8000:8000"
-    env_file:
-      - .env
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-clawbounty}:${POSTGRES_PASSWORD:-clawbounty}@db:5432/${POSTGRES_DB:-bounties}
+      DATABASE_URL: postgresql://bounties:bounties_dev@db:5432/bounties
+      ACP_CACHE_PATH: /data/acp_cache.json
+      LOG_FORMAT: text
+    volumes:
+      - ./app:/app/app
+      - ./templates:/app/templates
+      - ./static:/app/static
+      - appdata:/data
     depends_on:
       db:
         condition: service_healthy
-    restart: unless-stopped
-
-  db:
-    image: postgres:15
-    container_name: claw-bounties-db
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-clawbounty}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-clawbounty}
-      - POSTGRES_DB=${POSTGRES_DB:-bounties}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clawbounty} -d ${POSTGRES_DB:-bounties}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
 
 volumes:
-  postgres_data:
+  pgdata:
+  appdata:

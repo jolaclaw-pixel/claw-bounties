@@ -4,8 +4,6 @@ import json
 import logging
 import os
 import sys
-import time
-import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -20,14 +18,11 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.constants import (
-    ALLOWED_ORIGINS,
     APP_VERSION,
-    CSRF_PROTECTED_PATHS,
-    ERR_CSRF_FAILED,
     ERR_INTERNAL,
-    HONEYPOT_PATHS,
 )
 from app.database import init_db
+from app.middleware import register_middleware
 from app.routers import bounties, misc, services
 from app.routers.api_v1 import router as api_v1_router
 from app.routers.web import router as web_router, templates
@@ -79,14 +74,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_real_ip(request: Request) -> str:
-    """Extract the real client IP from X-Forwarded-For or fall back to remote address.
-
-    Args:
-        request: The incoming request.
-
-    Returns:
-        Client IP string.
-    """
+    """Extract the real client IP from X-Forwarded-For or fall back to remote address."""
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         return forwarded.split(",")[0].strip()
@@ -101,11 +89,7 @@ limiter = Limiter(key_func=get_real_ip)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[arg-type]
-    """Application lifespan: init DB, start background tasks.
-
-    Args:
-        app: The FastAPI application.
-    """
+    """Application lifespan: init DB, start background tasks."""
     from app.routers.misc import build_sitemap, set_sitemap_cache
     from app.tasks import expire_bounties_task, periodic_registry_refresh, supervised_task
 
@@ -140,22 +124,8 @@ app = FastAPI(
 # GZip compression
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
-
-@app.middleware("http")
-async def block_scanners(request: Request, call_next: Any) -> Any:
-    """Return 404 for common scanner/bot paths.
-
-    Args:
-        request: The incoming request.
-        call_next: Next middleware callable.
-
-    Returns:
-        JSONResponse 404 or the downstream response.
-    """
-    if request.url.path in HONEYPOT_PATHS:
-        return JSONResponse(status_code=404, content={"detail": "Not found"})
-    return await call_next(request)
-
+# Register all HTTP middleware from middleware module
+register_middleware(app)
 
 _cors_origins = os.getenv("CORS_ORIGINS", "https://clawbounty.io,http://localhost:8000,http://127.0.0.1:8000")
 _allowed_cors_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
@@ -164,7 +134,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_cors_origins,
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -172,103 +142,6 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next: Any) -> Any:
-    """Add security headers including CSP to all responses.
-
-    Args:
-        request: The incoming request.
-        call_next: Next middleware callable.
-
-    Returns:
-        Response with security headers.
-    """
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com; "
-        "img-src 'self' data: https:; "
-        "connect-src 'self' https://acpx.virtuals.io; "
-        "frame-ancestors 'none'"
-    )
-    return response
-
-
-@app.middleware("http")
-async def add_request_id(request: Request, call_next: Any) -> Any:
-    """Attach a unique request ID to every request and response.
-
-    Args:
-        request: The incoming request.
-        call_next: Next middleware callable.
-
-    Returns:
-        Response with X-Request-ID header.
-    """
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-    request.state.request_id = request_id
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    return response
-
-
-@app.middleware("http")
-async def request_logging(request: Request, call_next: Any) -> Any:
-    """Log method, path, status, and duration for every request.
-
-    Args:
-        request: The incoming request.
-        call_next: Next middleware callable.
-
-    Returns:
-        The downstream response.
-    """
-    start = time.perf_counter()
-    response = await call_next(request)
-    duration_ms = (time.perf_counter() - start) * 1000
-    request_id = getattr(request.state, "request_id", "")
-    logger.info(f"[{request_id}] {request.method} {request.url.path} {response.status_code} {duration_ms:.1f}ms")
-    return response
-
-
-@app.middleware("http")
-async def csrf_protection(request: Request, call_next: Any) -> Any:
-    """Check Origin/Referer on POST requests to web form endpoints for CSRF protection.
-
-    Args:
-        request: The incoming request.
-        call_next: Next middleware callable.
-
-    Returns:
-        403 JSONResponse if CSRF check fails, otherwise downstream response.
-    """
-    if request.method == "POST":
-        path = request.url.path
-        is_web_form = path in CSRF_PROTECTED_PATHS or (
-            path.startswith("/bounties/") and (path.endswith("/claim") or path.endswith("/fulfill"))
-        )
-        if is_web_form:
-            origin = request.headers.get("origin")
-            referer = request.headers.get("referer")
-            origin_ok = origin in ALLOWED_ORIGINS if origin else False
-            referer_ok = any(referer and referer.startswith(o) for o in ALLOWED_ORIGINS) if referer else False
-            if not origin_ok and not referer_ok:
-                if origin or referer:
-                    request_id = getattr(request.state, "request_id", "")
-                    return JSONResponse(
-                        status_code=403,
-                        content={"detail": "CSRF validation failed", "code": ERR_CSRF_FAILED, "request_id": request_id},
-                    )
-    return await call_next(request)
 
 
 # ---- Include routers ----
@@ -291,15 +164,7 @@ _compat_router = APIRouter(tags=["compat"])
     deprecated=True,
 )
 async def compat_bounties(request: Request, path: str) -> Any:
-    """Redirect old /api/bounties/ paths to /api/v1/bounties/.
-
-    Args:
-        request: The incoming request.
-        path: The sub-path.
-
-    Returns:
-        307 RedirectResponse with Deprecation header.
-    """
+    """Redirect old /api/bounties/ paths to /api/v1/bounties/."""
     new_url = f"/api/v1/bounties/{path}"
     if request.url.query:
         new_url += f"?{request.url.query}"
@@ -316,15 +181,7 @@ async def compat_bounties(request: Request, path: str) -> Any:
     deprecated=True,
 )
 async def compat_services(request: Request, path: str) -> Any:
-    """Redirect old /api/services/ paths to /api/v1/services/.
-
-    Args:
-        request: The incoming request.
-        path: The sub-path.
-
-    Returns:
-        307 RedirectResponse with Deprecation header.
-    """
+    """Redirect old /api/services/ paths to /api/v1/services/."""
     new_url = f"/api/v1/services/{path}"
     if request.url.query:
         new_url += f"?{request.url.query}"
@@ -342,17 +199,9 @@ app.include_router(_compat_router)
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception) -> Any:
-    """Catch-all error handler: JSON for API routes, HTML for web routes.
-
-    Args:
-        request: The incoming request.
-        exc: The unhandled exception.
-
-    Returns:
-        JSONResponse for API routes, TemplateResponse for web routes.
-    """
+    """Catch-all error handler: JSON for API routes, HTML for web routes."""
     request_id = getattr(request.state, "request_id", "")
-    logger.error(f"[{request_id}] Unhandled exception on {request.url.path}: {exc}")
+    logger.error("[%s] Unhandled exception on %s: %s", request_id, request.url.path, exc)
     if request.url.path.startswith("/api/"):
         return JSONResponse(
             status_code=500,

@@ -1,0 +1,11 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=app --cov-report=term-missing --cov-report=html:htmlcov"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 50

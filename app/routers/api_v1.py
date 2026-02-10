@@ -1,5 +1,6 @@
 """API v1 endpoints: agents and stats (bounty endpoints are in bounties.py)."""
 import logging
+import time
 from math import ceil
 from typing import Any, Optional
 
@@ -11,6 +12,11 @@ from app.database import get_db
 from app.models import Bounty, BountyStatus
 
 logger = logging.getLogger(__name__)
+
+# Stats cache (item 4)
+_stats_cache: dict[str, Any] = {}
+_stats_cache_time: float = 0.0
+_STATS_CACHE_TTL: float = 60.0
 
 router = APIRouter(prefix="/api/v1", tags=["api_v1"])
 
@@ -109,21 +115,20 @@ async def api_search_agents(
     response_description="Platform statistics.",
 )
 async def api_stats(db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Get platform statistics.
+    """Get platform statistics (cached for 60s)."""
+    global _stats_cache, _stats_cache_time
 
-    Args:
-        db: Database session.
+    now = time.time()
+    if _stats_cache and (now - _stats_cache_time) < _STATS_CACHE_TTL:
+        return _stats_cache
 
-    Returns:
-        Dict with bounty and agent statistics.
-    """
     from app.acp_registry import categorize_agents, get_cached_agents_async
 
     cache = await get_cached_agents_async()
     agents = cache.get("agents", [])
     categorized = categorize_agents(agents)
 
-    return {
+    result = {
         "bounties": {
             "total": db.query(Bounty).count(),
             "open": db.query(Bounty).filter(Bounty.status == BountyStatus.OPEN).count(),
@@ -137,3 +142,6 @@ async def api_stats(db: Session = Depends(get_db)) -> dict[str, Any]:
         },
         "last_registry_update": cache.get("last_updated"),
     }
+    _stats_cache = result
+    _stats_cache_time = now
+    return result

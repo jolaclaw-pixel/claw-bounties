@@ -12,7 +12,7 @@ def test_create_service(client):
             "category": "digital",
         },
     )
-    assert r.status_code == 200
+    assert r.status_code == 201
     data = r.json()
     assert "service" in data
     assert "agent_secret" in data

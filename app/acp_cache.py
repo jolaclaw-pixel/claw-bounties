@@ -30,10 +30,10 @@ def _load_cache_from_file() -> bool:
                 data = json_module.load(f)
             if data.get("agents"):
                 _acp_cache = data
-                logger.info(f"Loaded ACP cache from file: {len(data['agents'])} agents")
+                logger.info("Loaded ACP cache from file: %s agents", len(data["agents"]))
                 return True
     except Exception as e:
-        logger.warning(f"Failed to load ACP cache from file: {e}")
+        logger.warning("Failed to load ACP cache from file: %s", e)
     return False
 
 
@@ -43,9 +43,9 @@ def _save_cache_to_file() -> None:
         os.makedirs(os.path.dirname(CACHE_FILE_PATH), exist_ok=True)
         with open(CACHE_FILE_PATH, "w") as f:
             json_module.dump(_acp_cache, f)
-        logger.info(f"Saved ACP cache to {CACHE_FILE_PATH}")
+        logger.info("Saved ACP cache to %s", CACHE_FILE_PATH)
     except Exception as e:
-        logger.warning(f"Failed to save ACP cache to file: {e}")
+        logger.warning("Failed to save ACP cache to file: %s", e)
 
 
 # Load from file on module import (before async refresh)

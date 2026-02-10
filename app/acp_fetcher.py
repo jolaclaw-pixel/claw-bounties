@@ -32,7 +32,7 @@ async def fetch_agents_page(page: int = 1, page_size: int = ACP_PAGE_SIZE) -> Di
             resp.raise_for_status()
             return resp.json()
     except Exception as e:
-        logger.error(f"Error fetching page {page}: {e}")
+        logger.error("Error fetching page %s: %s", page, e)
         return {"data": [], "meta": {"pagination": {"total": 0}}}
 
 
@@ -96,7 +96,7 @@ def parse_agent(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             },
         }
     except Exception as e:
-        logger.error(f"Error parsing agent: {e}")
+        logger.error("Error parsing agent: %s", e)
         return None
 
 
@@ -134,7 +134,7 @@ async def fetch_all_agents(cached_agents: list, cached_last_updated: Any, cached
         total = meta.get("total", 0)
         total_pages = meta.get("pageCount", 1)
 
-        logger.info(f"ACP Registry: {total} total agents across {total_pages} pages")
+        logger.info("ACP Registry: %s total agents across %s pages", total, total_pages)
 
         for agent_data in first_page.get("data", []):
             parsed = parse_agent(agent_data)
@@ -159,7 +159,7 @@ async def fetch_all_agents(cached_agents: list, cached_last_updated: Any, cached
         acp_circuit_breaker.record_success()
     except Exception as e:
         acp_circuit_breaker.record_failure()
-        logger.error(f"ACP fetch failed: {e}")
+        logger.error("ACP fetch failed: %s", e)
         errors.append(str(e))
 
     return {

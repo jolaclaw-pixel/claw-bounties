@@ -56,7 +56,7 @@ async def send_bounty_webhook(
     if not callback_url:
         return
     if not validate_callback_url(callback_url):
-        logger.warning(f"Blocked webhook to invalid/private URL: {callback_url}")
+        logger.warning("Blocked webhook to invalid/private URL: %s", callback_url)
         return
 
     import asyncio
@@ -76,7 +76,7 @@ async def send_bounty_webhook(
         try:
             async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT_SECONDS) as client:
                 response = await client.post(callback_url, json=payload, headers=headers)
-                logger.info(f"Webhook sent ({event}) to {callback_url}: {response.status_code}")
+                logger.info("Webhook sent (%s) to %s: %s", event, callback_url, response.status_code)
                 return
         except Exception as e:
             delay = WEBHOOK_RETRY_BASE_DELAY * (2 ** attempt)
@@ -87,7 +87,7 @@ async def send_bounty_webhook(
             if attempt < WEBHOOK_MAX_RETRIES - 1:
                 await asyncio.sleep(delay)
 
-    logger.error(f"Webhook DEAD LETTER: event={event} url={callback_url} payload={json.dumps(bounty_data, default=str)}")
+    logger.error("Webhook DEAD LETTER: event=%s url=%s payload=%s", event, callback_url, json.dumps(bounty_data, default=str))
 
 
 # --------------- ACP search ---------------

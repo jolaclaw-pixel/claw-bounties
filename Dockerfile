@@ -1,13 +1,26 @@
+# Stage 1: Install dependencies
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Stage 2: Runtime
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy installed packages from builder
+COPY --from=builder /install /usr/local
 
-# Copy application
-COPY . .
+# Copy only runtime files (no tests, no dev deps)
+COPY app/ app/
+COPY templates/ templates/
+COPY static/ static/
+COPY alembic/ alembic/
+COPY alembic.ini .
+COPY SKILL.md .
 
 # Create data directory
 RUN mkdir -p /data

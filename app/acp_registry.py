@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 from app.acp_cache import get_cached_agents, update_cache  # noqa: F401
 from app.acp_fetcher import fetch_agents_page, fetch_all_agents, parse_agent  # noqa: F401
-from app.acp_search import categorize_agents, get_agent_by_wallet, search_agents  # noqa: F401
+from app.acp_search import categorize_agents, get_agent_by_wallet, rebuild_inverted_index, search_agents  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,8 @@ async def refresh_cache() -> Dict[str, Any]:
     )
     if result["agents"]:
         updated = update_cache(result["agents"], result["last_updated"], result.get("errors"))
-        logger.info(f"ACP Cache refreshed: {len(result['agents'])} agents")
+        rebuild_inverted_index(result["agents"])
+        logger.info("ACP Cache refreshed: %s agents", len(result["agents"]))
         return updated
     else:
         logger.warning("ACP refresh returned no agents — keeping existing cache")

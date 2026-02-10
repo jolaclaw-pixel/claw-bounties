@@ -78,5 +78,5 @@ def create_test_bounty(client: TestClient, **overrides: Any) -> dict[str, Any]:
     }
     payload.update(overrides)
     r = client.post("/api/v1/bounties/", json=payload)
-    assert r.status_code == 200, f"Failed to create bounty: {r.text}"
+    assert r.status_code in (200, 201), f"Failed to create bounty: {r.text}"
     return r.json()

@@ -1,5 +1,6 @@
 """Miscellaneous routes: health, sitemap, favicon, robots, skill manifest, registry."""
 import hashlib
+import hmac
 import os
 import logging
 from datetime import datetime, timezone
@@ -66,6 +67,7 @@ async def build_sitemap() -> str:
 
 
 _sitemap_cache: Optional[str] = None
+_sitemap_dirty: bool = True
 
 
 def get_sitemap_cache() -> Optional[str]:
@@ -75,8 +77,20 @@ def get_sitemap_cache() -> Optional[str]:
 
 def set_sitemap_cache(value: Optional[str]) -> None:
     """Set the sitemap cache value."""
-    global _sitemap_cache
+    global _sitemap_cache, _sitemap_dirty
     _sitemap_cache = value
+    _sitemap_dirty = value is None
+
+
+def is_sitemap_dirty() -> bool:
+    """Check if sitemap needs rebuilding."""
+    return _sitemap_dirty
+
+
+def mark_sitemap_clean() -> None:
+    """Mark sitemap as up-to-date."""
+    global _sitemap_dirty
+    _sitemap_dirty = False
 
 
 # ---- Endpoints ----
@@ -243,7 +257,7 @@ async def refresh_registry(
         provided = x_admin_secret or ""
         if authorization and authorization.startswith("Bearer "):
             provided = authorization[7:]
-        if provided != _ADMIN_SECRET:
+        if not hmac.compare_digest(provided, _ADMIN_SECRET):
             raise HTTPException(status_code=403, detail="Invalid or missing admin secret")
 
     # Rate limiting

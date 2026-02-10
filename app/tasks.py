@@ -16,18 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 async def supervised_task(name: str, coro_fn: Any, *args: Any) -> None:
-    """Run a coroutine forever, restarting on crash with a delay.
-
-    Args:
-        name: Human-readable task name for logging.
-        coro_fn: Async callable to run in a loop.
-        *args: Arguments forwarded to coro_fn.
-    """
+    """Run a coroutine forever, restarting on crash with a delay."""
     while True:
         try:
             await coro_fn(*args)
-        except Exception as e:
-            logger.error(f"Task {name} crashed: {e}, restarting in {TASK_RESTART_DELAY}s...")
+        except Exception:
+            logger.exception("Task %s crashed, restarting in %ss...", name, TASK_RESTART_DELAY)
             await asyncio.sleep(TASK_RESTART_DELAY)
 
 
@@ -50,19 +44,19 @@ async def expire_bounties_task() -> None:
             )
             for bounty in expired:
                 bounty.status = BountyStatus.CANCELLED
-                logger.info(f"Auto-cancelled expired bounty #{bounty.id}: {bounty.title}")
+                logger.info("Auto-cancelled expired bounty #%s: %s", bounty.id, bounty.title)
             if expired:
                 db.commit()
-                logger.info(f"Expired {len(expired)} bounties")
-        except Exception as e:
-            logger.error(f"Bounty expiration task failed: {e}")
+                logger.info("Expired %s bounties", len(expired))
+        except Exception:
+            logger.exception("Bounty expiration task failed")
         finally:
             if db:
                 db.close()
 
 
 async def periodic_registry_refresh() -> None:
-    """Background task to refresh ACP registry every 5 minutes and rebuild sitemap."""
+    """Background task to refresh ACP registry every 5 minutes and rebuild sitemap if dirty."""
     from app.acp_registry import refresh_cache
 
     while True:
@@ -72,14 +66,16 @@ async def periodic_registry_refresh() -> None:
             await refresh_cache()
             logger.info("Periodic ACP registry refresh complete")
 
-            # Rebuild sitemap after registry refresh
+            # Only rebuild sitemap if it's been invalidated
             try:
-                from app.routers.misc import build_sitemap, set_sitemap_cache
-                sitemap = await build_sitemap()
-                set_sitemap_cache(sitemap)
-                logger.info("Sitemap rebuilt after registry refresh")
-            except Exception as e:
-                logger.warning(f"Sitemap rebuild failed: {e}")
+                from app.routers.misc import build_sitemap, is_sitemap_dirty, mark_sitemap_clean, set_sitemap_cache
+                if is_sitemap_dirty():
+                    sitemap = await build_sitemap()
+                    set_sitemap_cache(sitemap)
+                    mark_sitemap_clean()
+                    logger.info("Sitemap rebuilt after registry refresh")
+            except Exception:
+                logger.exception("Sitemap rebuild failed")
 
-        except Exception as e:
-            logger.error(f"Periodic refresh failed: {e}")
+        except Exception:
+            logger.exception("Periodic refresh failed")

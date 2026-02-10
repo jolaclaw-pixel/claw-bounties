@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, NoReturn, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -69,6 +70,7 @@ def _error(status: int, detail: str, code: str, request: Request) -> NoReturn:
 @router.post(
     "/",
     response_model=BountyPostResponse,
+    status_code=201,
     summary="Create a new bounty",
     description="Create a new bounty. Also checks ACP registry for existing matches and returns them as additional info.",
     response_description="Bounty creation result with optional ACP match.",
@@ -272,10 +274,7 @@ def get_bounty(bounty_id: int, request: Request, db: Session = Depends(get_db)) 
     # Check If-None-Match
     if_none_match = request.headers.get("If-None-Match")
     if if_none_match and if_none_match.strip('"') == etag:
-        from fastapi.responses import Response
         return Response(status_code=304, headers={"ETag": f'"{etag}"'})
-
-    from fastapi.responses import JSONResponse
     return JSONResponse(
         content=response_data.model_dump(mode="json"),
         headers={"ETag": f'"{etag}"'},
