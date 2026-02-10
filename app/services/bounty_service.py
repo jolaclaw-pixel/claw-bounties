@@ -4,7 +4,7 @@ import hmac
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -48,9 +48,6 @@ async def send_bounty_webhook(
 ) -> None:
     """Send webhook notification for bounty events with retry and HMAC signature.
 
-    Retries up to WEBHOOK_MAX_RETRIES times with exponential backoff.
-    Signs payloads with HMAC-SHA256 if WEBHOOK_HMAC_SECRET is configured.
-
     Args:
         callback_url: The URL to POST the webhook to.
         event: Event type string (e.g., 'bounty.claimed').
@@ -67,7 +64,7 @@ async def send_bounty_webhook(
     payload = {
         "event": event,
         "bounty": bounty_data,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -128,6 +125,18 @@ async def search_acp_registry(query: str) -> ACPSearchResult:
         return ACPSearchResult(found=False, agents=[], message=f"ACP search error: {str(e)}")
 
 
+# --------------- Sitemap invalidation ---------------
+
+
+def _invalidate_sitemap() -> None:
+    """Invalidate the sitemap cache so it gets rebuilt on next request."""
+    try:
+        from app.routers.misc import set_sitemap_cache
+        set_sitemap_cache(None)
+    except Exception:
+        pass
+
+
 # --------------- Bounty CRUD ---------------
 
 
@@ -174,11 +183,15 @@ def create_bounty(
         category=category,
         tags=sanitize_text(tags) if tags else None,
         status=BountyStatus.OPEN,
-        expires_at=datetime.utcnow() + timedelta(days=BOUNTY_EXPIRY_DAYS) if set_expiry else None,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=BOUNTY_EXPIRY_DAYS) if set_expiry else None,
     )
     db.add(bounty)
     db.commit()
     db.refresh(bounty)
+
+    # Invalidate sitemap so the new bounty URL is included
+    _invalidate_sitemap()
+
     return bounty, secret_token
 
 
@@ -220,7 +233,7 @@ def claim_bounty(
     bounty.claimed_by = sanitize_text(claimer_name)
     bounty.claimer_callback_url = claimer_callback_url
     bounty.claimer_secret_hash = secret_hash
-    bounty.claimed_at = datetime.utcnow()
+    bounty.claimed_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(bounty)
     return secret_token
@@ -239,7 +252,7 @@ def fulfill_bounty(db: Session, bounty: Bounty, acp_job_id: Optional[str] = None
     """
     bounty.status = BountyStatus.FULFILLED
     bounty.acp_job_id = acp_job_id
-    bounty.fulfilled_at = datetime.utcnow()
+    bounty.fulfilled_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(bounty)
     return bounty
@@ -289,7 +302,7 @@ def check_rate_limit(db: Session, poster_name: str, max_per_hour: int = 5) -> Op
     Returns:
         Error message string or None if within limit.
     """
-    one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
     recent_count = (
         db.query(Bounty)
         .filter(Bounty.poster_name == poster_name, Bounty.created_at >= one_hour_ago)

@@ -3,7 +3,7 @@ import enum
 import hashlib
 import secrets
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -114,4 +114,8 @@ class Bounty(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Additional indexes for performance (status/category/created_at already indexed via Column(index=True))
+    # Composite indexes for common query patterns
+    __table_args__ = (
+        Index("ix_bounties_status_category", "status", "category"),
+        Index("ix_bounties_status_created_at", "status", "created_at"),
+    )

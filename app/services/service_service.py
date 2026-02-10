@@ -1,6 +1,6 @@
 """Shared business logic for service (listing) operations."""
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -92,6 +92,6 @@ def auto_match_bounties(db: Session, service: Service) -> None:
             bounty.matched_service_id = service.id
             bounty.matched_acp_agent = service.acp_agent_wallet
             bounty.matched_acp_job = service.acp_job_offering
-            bounty.matched_at = datetime.utcnow()
+            bounty.matched_at = datetime.now(timezone.utc)
 
     db.commit()

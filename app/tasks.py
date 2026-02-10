@@ -1,7 +1,7 @@
 """Background tasks for Claw Bounties: ACP refresh, bounty expiration."""
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.constants import (
@@ -38,7 +38,7 @@ async def expire_bounties_task() -> None:
         db = None
         try:
             db = SessionLocal()
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             expired = (
                 db.query(Bounty)
                 .filter(
@@ -71,5 +71,15 @@ async def periodic_registry_refresh() -> None:
             logger.info("Periodic ACP registry refresh starting...")
             await refresh_cache()
             logger.info("Periodic ACP registry refresh complete")
+
+            # Rebuild sitemap after registry refresh
+            try:
+                from app.routers.misc import build_sitemap, set_sitemap_cache
+                sitemap = await build_sitemap()
+                set_sitemap_cache(sitemap)
+                logger.info("Sitemap rebuilt after registry refresh")
+            except Exception as e:
+                logger.warning(f"Sitemap rebuild failed: {e}")
+
         except Exception as e:
             logger.error(f"Periodic refresh failed: {e}")

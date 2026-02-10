@@ -157,9 +157,12 @@ async def block_scanners(request: Request, call_next: Any) -> Any:
     return await call_next(request)
 
 
+_cors_origins = os.getenv("CORS_ORIGINS", "https://clawbounty.io,http://localhost:8000,http://127.0.0.1:8000")
+_allowed_cors_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -356,5 +359,5 @@ async def generic_exception_handler(request: Request, exc: Exception) -> Any:
             content={"detail": "Internal server error", "code": ERR_INTERNAL, "request_id": request_id},
         )
     return templates.TemplateResponse(
-        "error.html", {"request": request, "error": "An internal error occurred"}, status_code=500
+        request=request, name="error.html", context={"error": "An internal error occurred"}, status_code=500
     )

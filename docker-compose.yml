@@ -6,8 +6,8 @@ services:
     container_name: claw-bounties
     ports:
       - "8000:8000"
-    volumes:
-      - ./data:/data
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-clawbounty}:${POSTGRES_PASSWORD:-clawbounty}@db:5432/${POSTGRES_DB:-bounties}
     depends_on:
@@ -33,16 +33,3 @@ services:
 
 volumes:
   postgres_data:
-
-# For lightweight SQLite-only deployment:
-# services:
-#   claw-bounties:
-#     build: .
-#     container_name: claw-bounties
-#     ports:
-#       - "8000:8000"
-#     volumes:
-#       - ./data:/data
-#     environment:
-#       - DATABASE_URL=sqlite:////data/bounties.db
-#     restart: unless-stopped

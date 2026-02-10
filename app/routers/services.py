@@ -1,6 +1,6 @@
 """API routes for service listing CRUD operations."""
 import hashlib
-from typing import Any, Optional
+from typing import Any, NoReturn, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import desc
@@ -28,8 +28,8 @@ from app.services.service_service import auto_match_bounties, create_service as 
 router = APIRouter(prefix="/api/v1/services", tags=["services"])
 
 
-def _error(status: int, detail: str, code: str, request: Request) -> HTTPException:
-    """Create a structured HTTPException.
+def _error(status: int, detail: str, code: str, request: Request) -> NoReturn:
+    """Create and raise a structured HTTPException.
 
     Args:
         status: HTTP status code.
@@ -37,8 +37,8 @@ def _error(status: int, detail: str, code: str, request: Request) -> HTTPExcepti
         code: Machine-readable error code.
         request: The incoming request.
 
-    Returns:
-        HTTPException with structured detail.
+    Raises:
+        HTTPException: Always raised.
     """
     request_id = getattr(request.state, "request_id", "")
     raise HTTPException(
@@ -184,7 +184,7 @@ def get_service(service_id: int, request: Request, db: Session = Depends(get_db)
 
     response_data = ServiceResponse.model_validate(service)
     etag_source = f"{service.id}-{service.is_active}-{service.updated_at or service.created_at}"
-    etag = hashlib.md5(etag_source.encode()).hexdigest()
+    etag = hashlib.sha256(etag_source.encode()).hexdigest()
 
     if_none_match = request.headers.get("If-None-Match")
     if if_none_match and if_none_match.strip('"') == etag:

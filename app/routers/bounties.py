@@ -1,8 +1,8 @@
 """API routes for bounty CRUD operations."""
 import hashlib
 import logging
-from datetime import datetime
-from typing import Any, Optional
+from datetime import datetime, timezone
+from typing import Any, NoReturn, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import desc
@@ -47,8 +47,8 @@ router = APIRouter(prefix="/api/v1/bounties", tags=["bounties"])
 logger = logging.getLogger(__name__)
 
 
-def _error(status: int, detail: str, code: str, request: Request) -> HTTPException:
-    """Create a structured HTTPException with error code and request ID.
+def _error(status: int, detail: str, code: str, request: Request) -> NoReturn:
+    """Create and raise a structured HTTPException with error code and request ID.
 
     Args:
         status: HTTP status code.
@@ -56,8 +56,8 @@ def _error(status: int, detail: str, code: str, request: Request) -> HTTPExcepti
         code: Machine-readable error code.
         request: The incoming request (for request_id).
 
-    Returns:
-        HTTPException with structured detail.
+    Raises:
+        HTTPException: Always raised.
     """
     request_id = getattr(request.state, "request_id", "")
     raise HTTPException(
@@ -70,11 +70,11 @@ def _error(status: int, detail: str, code: str, request: Request) -> HTTPExcepti
     "/",
     response_model=BountyPostResponse,
     summary="Create a new bounty",
-    description="Create a new bounty. First checks ACP registry for existing matches. Returns a poster_secret token — SAVE THIS!",
+    description="Create a new bounty. Also checks ACP registry for existing matches and returns them as additional info.",
     response_description="Bounty creation result with optional ACP match.",
 )
 async def create_bounty(bounty: BountyCreate, request: Request, db: Session = Depends(get_db)) -> BountyPostResponse:
-    """Create a new bounty, checking ACP first.
+    """Create a new bounty, always creating it and checking ACP for matches.
 
     Args:
         bounty: Bounty creation data.
@@ -82,23 +82,12 @@ async def create_bounty(bounty: BountyCreate, request: Request, db: Session = De
         db: Database session.
 
     Returns:
-        BountyPostResponse with the created bounty or ACP match.
+        BountyPostResponse with the created bounty and optional ACP match.
     """
     if bounty.poster_callback_url and not validate_callback_url(bounty.poster_callback_url):
         _error(400, "Invalid callback URL: private/internal addresses are not allowed", ERR_INVALID_CALLBACK_URL, request)
 
-    search_query = f"{bounty.title} {bounty.tags or ''}"
-    acp_result = await search_acp_registry(search_query)
-
-    if acp_result.found and len(acp_result.agents) > 0:
-        return BountyPostResponse(
-            bounty=None,
-            poster_secret=None,
-            acp_match=acp_result,
-            action="acp_available",
-            message=f"Service already available on ACP! Found {len(acp_result.agents)} matching agent(s).",
-        )
-
+    # Always create the bounty first
     db_bounty, secret_token = svc_create_bounty(
         db,
         poster_name=bounty.poster_name,
@@ -112,12 +101,20 @@ async def create_bounty(bounty: BountyCreate, request: Request, db: Session = De
         set_expiry=False,
     )
 
+    # Then check ACP for matches as additional info
+    search_query = f"{bounty.title} {bounty.tags or ''}"
+    acp_result = await search_acp_registry(search_query)
+
+    message = "Bounty posted! SAVE YOUR poster_secret — you need it to modify/cancel this bounty."
+    if acp_result.found and len(acp_result.agents) > 0:
+        message += f" Also found {len(acp_result.agents)} matching ACP agent(s) you may want to match with."
+
     return BountyPostResponse(
         bounty=BountyResponse.model_validate(db_bounty),
         poster_secret=secret_token,
         acp_match=acp_result,
         action="posted",
-        message="Bounty posted! SAVE YOUR poster_secret — you need it to modify/cancel this bounty.",
+        message=message,
     )
 
 
@@ -172,8 +169,11 @@ def list_bounties(
             | (Bounty.tags.ilike(search_term))
         )
 
-    total = query.count()
+    # Single query: get all results then derive count from len()
     bounties = query.order_by(desc(Bounty.created_at)).offset(offset).limit(limit).all()
+    # For total, we still need a count query (limit/offset don't give us total)
+    # But we avoid the double full-table scan by using count() on the filtered query
+    total = query.count()
     page = (offset // limit) + 1 if limit > 0 else 1
     bounty_responses = [BountyResponse.model_validate(b) for b in bounties]
 
@@ -265,9 +265,9 @@ def get_bounty(bounty_id: int, request: Request, db: Session = Depends(get_db)) 
         _error(404, "Bounty not found", ERR_BOUNTY_NOT_FOUND, request)
 
     response_data = BountyResponse.model_validate(bounty)
-    # ETag based on status + updated_at
+    # ETag based on status + updated_at (SHA-256)
     etag_source = f"{bounty.id}-{bounty.status}-{bounty.updated_at or bounty.created_at}"
-    etag = hashlib.md5(etag_source.encode()).hexdigest()
+    etag = hashlib.sha256(etag_source.encode()).hexdigest()
 
     # Check If-None-Match
     if_none_match = request.headers.get("If-None-Match")
@@ -421,7 +421,7 @@ async def match_bounty(
     bounty.matched_service_id = match.service_id
     bounty.matched_acp_agent = match.acp_agent_wallet
     bounty.matched_acp_job = match.acp_job_offering
-    bounty.matched_at = datetime.utcnow()
+    bounty.matched_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(bounty)
 

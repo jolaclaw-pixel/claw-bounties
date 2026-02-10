@@ -2,10 +2,10 @@
 import hashlib
 import os
 import logging
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse, FileResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -21,6 +21,12 @@ from app.models import Bounty
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["misc"])
+
+_ADMIN_SECRET: str = os.getenv("ADMIN_SECRET", "")
+
+# ---- Rate limiting state for registry refresh ----
+_last_refresh_time: float = 0.0
+_REFRESH_COOLDOWN_SECONDS: float = 30.0
 
 
 # ---- Sitemap ----
@@ -59,15 +65,15 @@ async def build_sitemap() -> str:
     return xml
 
 
-_sitemap_cache: str | None = None
+_sitemap_cache: Optional[str] = None
 
 
-def get_sitemap_cache() -> str | None:
+def get_sitemap_cache() -> Optional[str]:
     """Get the current sitemap cache value."""
     return _sitemap_cache
 
 
-def set_sitemap_cache(value: str) -> None:
+def set_sitemap_cache(value: Optional[str]) -> None:
     """Set the sitemap cache value."""
     global _sitemap_cache
     _sitemap_cache = value
@@ -123,7 +129,7 @@ async def health(request: Request, db: Session = Depends(get_db)) -> dict[str, A
         last_updated = cache.get("last_updated")
         if last_updated:
             updated_dt = datetime.fromisoformat(last_updated)
-            age = (datetime.utcnow() - updated_dt).total_seconds() / 60
+            age = (datetime.now(timezone.utc) - updated_dt.replace(tzinfo=timezone.utc)).total_seconds() / 60
             acp_age_minutes = round(age, 1)
             acp_status = "fresh" if age < ACP_CACHE_STALE_MINUTES else "stale"
         else:
@@ -176,7 +182,7 @@ async def sitemap_xml() -> Response:
     global _sitemap_cache
     if _sitemap_cache is None:
         _sitemap_cache = await build_sitemap()
-    etag = hashlib.md5(_sitemap_cache.encode()).hexdigest()
+    etag = hashlib.sha256(_sitemap_cache.encode()).hexdigest()
     return Response(
         content=_sitemap_cache,
         media_type="application/xml",
@@ -212,18 +218,44 @@ async def get_registry() -> dict[str, Any]:
 @router.post(
     "/api/registry/refresh",
     summary="Refresh ACP registry",
-    description="Force-refresh the ACP agent registry cache (rate-limited).",
+    description="Force-refresh the ACP agent registry cache. Requires ADMIN_SECRET auth and is rate-limited.",
     response_description="Refresh status with agent count.",
 )
-async def refresh_registry(request: Request) -> dict[str, Any]:
-    """Force-refresh the ACP agent registry cache (rate-limited).
+async def refresh_registry(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_admin_secret: Optional[str] = Header(None),
+) -> dict[str, Any]:
+    """Force-refresh the ACP agent registry cache (auth required, rate-limited).
 
     Args:
         request: The incoming request.
+        authorization: Optional Bearer token header.
+        x_admin_secret: Optional X-Admin-Secret header.
 
     Returns:
         Dict with status, agents_count, and last_updated.
     """
+    import time
+
+    # Auth check
+    if _ADMIN_SECRET:
+        provided = x_admin_secret or ""
+        if authorization and authorization.startswith("Bearer "):
+            provided = authorization[7:]
+        if provided != _ADMIN_SECRET:
+            raise HTTPException(status_code=403, detail="Invalid or missing admin secret")
+
+    # Rate limiting
+    global _last_refresh_time
+    now = time.time()
+    if now - _last_refresh_time < _REFRESH_COOLDOWN_SECONDS:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limited. Try again in {int(_REFRESH_COOLDOWN_SECONDS - (now - _last_refresh_time))}s",
+        )
+    _last_refresh_time = now
+
     from app.acp_registry import refresh_cache
 
     cache = await refresh_cache()

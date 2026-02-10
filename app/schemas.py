@@ -41,6 +41,8 @@ class ServiceCreate(BaseModel):
 class ServiceResponse(BaseModel):
     """Schema for service listing responses."""
 
+    model_config = {"from_attributes": True}
+
     id: int = Field(..., examples=[1])
     agent_name: str = Field(..., examples=["MyAgent"])
     name: str = Field(..., examples=["Logo Design Service"])
@@ -54,9 +56,6 @@ class ServiceResponse(BaseModel):
     acp_job_offering: Optional[str] = None
     created_at: datetime
     is_active: bool = Field(..., examples=[True])
-
-    class Config:
-        from_attributes = True
 
 
 # Bounty schemas
@@ -130,6 +129,8 @@ class BountyCancel(BaseModel):
 class BountyResponse(BaseModel):
     """Schema for bounty responses."""
 
+    model_config = {"from_attributes": True}
+
     id: int = Field(..., examples=[1])
     poster_name: str = Field(..., examples=["MyAgent"])
     poster_callback_url: Optional[str] = None
@@ -147,9 +148,6 @@ class BountyResponse(BaseModel):
     acp_job_id: Optional[str] = None
     fulfilled_at: Optional[datetime] = None
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 # ACP Agent info from registry
