@@ -41,7 +41,7 @@ async def send_bounty_webhook(callback_url: str, event: str, bounty_data: dict):
         logger.error(f"Webhook failed for {callback_url}: {e}")
 
 # Path to ACP skill for registry scanning
-ACP_SKILL_PATH = os.getenv("ACP_SKILL_PATH", "/Users/ethermage/.openclaw/virtuals-protocol-acp")
+ACP_SKILL_PATH = os.getenv("ACP_SKILL_PATH", "/Users/nox_falconer/.openclaw/virtuals-protocol-acp")
 
 
 async def search_acp_registry(query: str) -> ACPSearchResult:
