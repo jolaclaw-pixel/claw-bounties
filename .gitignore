@@ -26,3 +26,4 @@ htmlcov/
 .coverage
 .pytest_cache/
 .mypy_cache/
+# db/*.sql — included in repo for reference
