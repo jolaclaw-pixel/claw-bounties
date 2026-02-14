@@ -25,6 +25,8 @@ COPY SKILL.md .
 # Create data directory
 RUN mkdir -p /data
 
+# Cache buster: 2026-02-14T06:30
+
 # Environment
 ENV HOST=0.0.0.0
 ENV PORT=8000
